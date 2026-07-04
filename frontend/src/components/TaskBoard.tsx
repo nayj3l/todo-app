@@ -16,11 +16,12 @@ import type { Task, TaskGroup } from '../types/board'
 import type { TaskPriority } from '../types/priority'
 import GroupHeader from './GroupHeader'
 import { ProjectCarouselFrame } from './ProjectCarousel'
-import TaskListInsertGutters, { type SeamHoverState } from './TaskListInsertGutters'
+import TaskInsertSlot from './TaskInsertSlot'
 import TaskRow from './TaskRow'
 import TaskSearchBar from './TaskSearchBar'
 import type { PriorityFilterValue } from '../hooks/useTaskFilters'
 import { isFilterActive, taskMatchesFilters } from '../utils/taskFilters'
+import { summarizeGroupTasks } from '../utils/groupStats'
 
 interface TaskBoardProps {
   groups: TaskGroup[]
@@ -148,8 +149,10 @@ export default function TaskBoard({
   const [activeTask, setActiveTask] = useState<Task | null>(null)
   const [expandedTaskId, setExpandedTaskId] = useState<number | null>(null)
   const [autoEditTaskId, setAutoEditTaskId] = useState<number | null>(null)
-  const [seamHover, setSeamHover] = useState<SeamHoverState | null>(null)
-  const [seamGapOpen, setSeamGapOpen] = useState<SeamHoverState | null>(null)
+  const [seamHover, setSeamHover] = useState<{
+    insertIndex: number
+    edge: 'top' | 'bottom'
+  } | null>(null)
 
   const tasksSignature = useMemo(
     () =>
@@ -165,15 +168,6 @@ export default function TaskBoard({
   useEffect(() => {
     setLocalTasks(tasks)
   }, [tasksSignature, tasks])
-
-  useEffect(() => {
-    if (!seamHover) {
-      setSeamGapOpen(null)
-      return
-    }
-    const timer = setTimeout(() => setSeamGapOpen(seamHover), 120)
-    return () => clearTimeout(timer)
-  }, [seamHover])
 
   useEffect(() => {
     if (expandedTaskId != null && !tasks.some((task) => task.id === expandedTaskId)) {
@@ -246,10 +240,15 @@ export default function TaskBoard({
 
   function handleCreateTask(groupId: number, insertAtIndex?: number) {
     void (async () => {
+      setSeamHover(null)
       const created = await onCreateTask(groupId, insertAtIndex)
       if (created) {
         setExpandedTaskId(null)
-        setAutoEditTaskId(created.id)
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setAutoEditTaskId(created.id)
+          })
+        })
       }
     })()
   }
@@ -268,12 +267,19 @@ export default function TaskBoard({
   function renderGroupSection(group: TaskGroup, index: number) {
     const groupTasksList = groupTasks(localTasks, group.id, searchQuery, priorityFilter)
     const groupHasTasks = groupTasks(localTasks, group.id, '', 'ALL').length > 0
+    const groupSummary = summarizeGroupTasks(localTasks, group.id, searchQuery, priorityFilter)
     return (
       <section
         key={group.id}
         className={index > 0 && !isCarouselView ? 'mt-5 border-t border-[#EBEBF0] pt-5' : ''}
       >
-        <GroupHeader group={group} onRename={onRenameGroup} onAddTask={handleCreateTask} />
+        <GroupHeader
+          group={group}
+          summary={groupSummary}
+          filtersActive={filtersActive}
+          onRename={onRenameGroup}
+          onAddTask={handleCreateTask}
+        />
         <SortableContext
           id={`group-${group.id}`}
           items={groupTasksList.map((task) => `task-${task.id}`)}
@@ -288,73 +294,76 @@ export default function TaskBoard({
               </p>
             ) : (
               <div className="relative -mx-14 overflow-visible px-14">
-                <TaskListInsertGutters
-                  disabled={activeTask != null}
-                  layoutRevision={seamGapOpen}
-                  onInsert={(insertIndex) => handleCreateTaskAt(group.id, insertIndex)}
-                  onSeamHoverChange={setSeamHover}
-                >
-                  {groupTasksList.map((task, taskIndex) => {
-                    const stackPosition =
-                      groupTasksList.length === 1
-                        ? 'only'
-                        : taskIndex === 0
-                          ? 'first'
-                          : taskIndex === groupTasksList.length - 1
-                            ? 'last'
-                            : 'middle'
+                {groupTasksList.map((task, taskIndex) => {
+                  const stackPosition =
+                    groupTasksList.length === 1
+                      ? 'only'
+                      : taskIndex === 0
+                        ? 'first'
+                        : taskIndex === groupTasksList.length - 1
+                          ? 'last'
+                          : 'middle'
 
-                    const openBefore =
-                      seamGapOpen != null &&
-                      seamGapOpen.insertIndex === taskIndex &&
-                      seamGapOpen.edge === 'top'
-                    const openAfter =
-                      seamGapOpen != null &&
-                      ((seamGapOpen.insertIndex === taskIndex + 1 && seamGapOpen.edge === 'top') ||
-                        (seamGapOpen.edge === 'bottom' &&
-                          seamGapOpen.insertIndex === groupTasksList.length &&
-                          taskIndex === groupTasksList.length - 1))
-                    const seamOpen = openBefore || openAfter
+                  const openBefore =
+                    seamHover != null &&
+                    seamHover.insertIndex === taskIndex &&
+                    seamHover.edge === 'top'
+                  const openAfter =
+                    seamHover != null &&
+                    ((seamHover.insertIndex === taskIndex + 1 && seamHover.edge === 'top') ||
+                      (seamHover.edge === 'bottom' &&
+                        seamHover.insertIndex === groupTasksList.length &&
+                        taskIndex === groupTasksList.length - 1))
+                  const seamCurveAbove = openBefore
+                  const seamCurveBelow = openAfter
 
-                    return (
-                      <div
-                        key={task.id}
-                        className={`relative transition-all duration-200 ease-out ${
-                          openBefore ? 'mt-1' : taskIndex > 0 && !openAfter ? '-mt-px' : ''
-                        } ${openAfter ? 'mb-1' : ''} ${seamOpen ? 'opacity-[0.97]' : 'opacity-100'}`}
-                      >
-                        <span
-                          data-seam-insert={taskIndex}
-                          data-seam-edge="top"
-                          className="pointer-events-none absolute left-0 right-0 top-0 h-0"
+                  return (
+                    <div
+                      key={task.id}
+                      className={`relative ${taskIndex > 0 ? '-mt-px' : ''}`}
+                    >
+                      {!activeTask && (
+                        <TaskInsertSlot
+                          onInsert={() => handleCreateTaskAt(group.id, taskIndex)}
+                          onHoverChange={(active, zone) => {
+                            setSeamHover(
+                              active && zone ? { insertIndex: taskIndex, edge: 'top' } : null,
+                            )
+                          }}
                         />
-                        <TaskRow
-                          task={task}
-                          expanded={expandedTaskId === task.id}
-                          doubleClickRename={doubleClickRename}
-                          autoEditTitle={autoEditTaskId === task.id}
-                          stackPosition={stackPosition}
-                          seamGapAbove={openBefore}
-                          seamGapBelow={openAfter}
-                          onAutoEditConsumed={() => setAutoEditTaskId(null)}
-                          onToggleExpand={handleToggleExpand}
-                          onToggleDone={handleToggleDone}
-                          onSetPriority={handleSetPriority}
-                          onRenameTitle={handleRenameTask}
-                          onAddComment={handleAddComment}
-                          onDelete={handleDeleteTask}
+                      )}
+                      <TaskRow
+                        task={task}
+                        expanded={expandedTaskId === task.id}
+                        doubleClickRename={doubleClickRename}
+                        autoEditTitle={autoEditTaskId === task.id}
+                        stackPosition={stackPosition}
+                        seamGapAbove={seamCurveAbove}
+                        seamGapBelow={seamCurveBelow}
+                        onAutoEditConsumed={() => setAutoEditTaskId(null)}
+                        onToggleExpand={handleToggleExpand}
+                        onToggleDone={handleToggleDone}
+                        onSetPriority={handleSetPriority}
+                        onRenameTitle={handleRenameTask}
+                        onAddComment={handleAddComment}
+                        onDelete={handleDeleteTask}
+                      />
+                      {!activeTask && taskIndex === groupTasksList.length - 1 && (
+                        <TaskInsertSlot
+                          position="bottom"
+                          onInsert={() => handleCreateTaskAt(group.id, groupTasksList.length)}
+                          onHoverChange={(active, zone) => {
+                            setSeamHover(
+                              active && zone
+                                ? { insertIndex: groupTasksList.length, edge: 'bottom' }
+                                : null,
+                            )
+                          }}
                         />
-                        {taskIndex === groupTasksList.length - 1 && (
-                          <span
-                            data-seam-insert={groupTasksList.length}
-                            data-seam-edge="bottom"
-                            className="pointer-events-none absolute bottom-0 left-0 right-0 h-0"
-                          />
-                        )}
-                      </div>
-                    )
-                  })}
-                </TaskListInsertGutters>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             )}
 

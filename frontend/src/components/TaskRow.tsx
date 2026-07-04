@@ -47,6 +47,7 @@ export default function TaskRow({
   const [draft, setDraft] = useState(task.title)
   const inputRef = useRef<HTMLInputElement>(null)
   const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoEditStartedRef = useRef(false)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `task-${task.id}`,
     data: { type: 'task', taskId: task.id, groupId: task.groupId },
@@ -70,6 +71,7 @@ export default function TaskRow({
 
   useEffect(() => {
     if (!autoEditTitle) {
+      autoEditStartedRef.current = false
       return
     }
     if (clickTimeoutRef.current) {
@@ -78,8 +80,19 @@ export default function TaskRow({
     }
     setDraft(task.title)
     setEditing(true)
-    onAutoEditConsumed?.()
-  }, [autoEditTitle, onAutoEditConsumed, task.id, task.title])
+  }, [autoEditTitle, task.id, task.title])
+
+  useEffect(() => {
+    if (!editing || !autoEditTitle || autoEditStartedRef.current) {
+      return
+    }
+    autoEditStartedRef.current = true
+    requestAnimationFrame(() => {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+      onAutoEditConsumed?.()
+    })
+  }, [editing, autoEditTitle, onAutoEditConsumed])
 
   useEffect(() => {
     return () => {
@@ -184,7 +197,7 @@ export default function TaskRow({
         ref={setNodeRef}
         data-task-id={task.id}
         style={cardStyle}
-        className={`overflow-visible border ${stackRadiusClass} ${stackShadowClass} transition-[opacity,background-color,border-color,box-shadow] duration-300 ease-out ${cardBorderClass} ${cardBgClass}`}
+        className={`overflow-visible border ${stackRadiusClass} ${stackShadowClass} transition-[opacity,background-color,border-color,box-shadow,border-radius] duration-200 ease-out ${cardBorderClass} ${cardBgClass}`}
         onContextMenu={handleContextMenu}
       >
         <div className="flex cursor-pointer items-center gap-3 px-4 py-3" onClick={handleRowClick}>
