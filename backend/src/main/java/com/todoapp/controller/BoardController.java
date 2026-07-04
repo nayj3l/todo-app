@@ -5,6 +5,7 @@ import com.todoapp.dto.CommentRequest;
 import com.todoapp.dto.CommentResponse;
 import com.todoapp.dto.DoneRequest;
 import com.todoapp.dto.GroupCreateRequest;
+import com.todoapp.dto.GroupReorderRequest;
 import com.todoapp.dto.GroupResponse;
 import com.todoapp.dto.GroupUpdateRequest;
 import com.todoapp.dto.PriorityRequest;
@@ -60,6 +61,11 @@ public class BoardController {
     @PatchMapping("/groups/{id}")
     public GroupResponse updateGroup(@PathVariable Long id, @RequestBody GroupUpdateRequest request) {
         return boardService.updateGroup(id, request);
+    }
+
+    @PostMapping("/groups/reorder")
+    public BoardResponse reorderGroups(@Valid @RequestBody GroupReorderRequest request) {
+        return boardService.reorderGroups(request);
     }
 
     @DeleteMapping("/groups/{id}")

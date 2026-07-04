@@ -5,6 +5,7 @@ import com.todoapp.dto.BoardResponse;
 import com.todoapp.dto.CommentRequest;
 import com.todoapp.dto.CommentResponse;
 import com.todoapp.dto.GroupCreateRequest;
+import com.todoapp.dto.GroupReorderRequest;
 import com.todoapp.dto.GroupResponse;
 import com.todoapp.dto.GroupUpdateRequest;
 import com.todoapp.dto.RecycleBinResponse;
@@ -199,6 +200,35 @@ public class BoardService {
 
         taskGroupRepository.delete(group);
         writeBackupSnapshot();
+    }
+
+    @Transactional
+    public BoardResponse reorderGroups(GroupReorderRequest request) {
+        List<Long> orderedIds = request.getGroupIds();
+        List<TaskGroup> existing = taskGroupRepository.findAllByOrderBySortOrderAsc();
+
+        if (orderedIds.size() != existing.size()) {
+            throw new IllegalArgumentException("Group order must include every project");
+        }
+
+        java.util.Set<Long> existingIds = existing.stream()
+                .map(TaskGroup::getId)
+                .collect(java.util.stream.Collectors.toSet());
+        if (!existingIds.equals(new java.util.HashSet<>(orderedIds))) {
+            throw new IllegalArgumentException("Invalid project order");
+        }
+
+        java.util.Map<Long, TaskGroup> groupsById = existing.stream()
+                .collect(java.util.stream.Collectors.toMap(TaskGroup::getId, group -> group));
+
+        for (int index = 0; index < orderedIds.size(); index++) {
+            TaskGroup group = groupsById.get(orderedIds.get(index));
+            group.setSortOrder(index);
+            taskGroupRepository.save(group);
+        }
+
+        writeBackupSnapshot();
+        return getBoard();
     }
 
     private static final String[] DEFAULT_GROUP_COLORS = {

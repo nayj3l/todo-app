@@ -7,34 +7,6 @@ function blurFocusedElement() {
   }
 }
 
-interface ProjectCarouselPeekProps {
-  group: TaskGroup
-  align: 'left' | 'right'
-  onSelect: () => void
-}
-
-function ProjectCarouselPeek({ group, align, onSelect }: ProjectCarouselPeekProps) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`flex h-36 w-[5.5rem] flex-col items-center justify-center gap-2 rounded-2xl border border-surface-border/50 bg-white/80 px-2 py-3 text-center opacity-45 shadow-card outline-none transition hover:opacity-70 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-100 ${
-        align === 'left' ? 'mr-auto' : 'ml-auto'
-      }`}
-      aria-label={`Go to ${group.name}`}
-      title={group.name}
-    >
-      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: group.color }} />
-      <span className="line-clamp-3 text-[10px] font-medium leading-snug text-surface-muted">
-        {group.name}
-      </span>
-      {group.taskCount > 0 && (
-        <span className="text-[10px] tabular-nums text-surface-muted/70">{group.taskCount}</span>
-      )}
-    </button>
-  )
-}
-
 type SlideDirection = 'from-left' | 'from-right' | 'none'
 
 function isEditableTarget(target: EventTarget | null) {
@@ -106,31 +78,9 @@ export function ProjectCarouselFrame({
         : ''
 
   return (
-    <div className="relative w-full">
-      {prevGroup && (
-        <div className="absolute left-0 top-1/2 z-10 hidden -translate-y-1/2 sm:block">
-          <ProjectCarouselPeek
-            group={prevGroup}
-            align="left"
-            onSelect={() => onSelectGroup(prevGroup.id)}
-          />
-        </div>
-      )}
-
-      {nextGroup && (
-        <div className="absolute right-0 top-1/2 z-10 hidden -translate-y-1/2 sm:block">
-          <ProjectCarouselPeek
-            group={nextGroup}
-            align="right"
-            onSelect={() => onSelectGroup(nextGroup.id)}
-          />
-        </div>
-      )}
-
-      <div className="mx-auto w-full max-w-xl overflow-hidden">
-        <div key={activeGroupId} className={slideClass}>
-          {children}
-        </div>
+    <div className="mx-auto w-full max-w-xl overflow-visible">
+      <div key={activeGroupId} className={slideClass}>
+        {children}
       </div>
     </div>
   )

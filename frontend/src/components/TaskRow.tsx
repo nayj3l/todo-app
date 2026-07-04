@@ -2,6 +2,7 @@ import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useEffect, useRef, useState } from 'react'
 import type { Task } from '../types/board'
+import { DEFAULT_TASK_TITLE } from '../constants/tasks'
 import { getPriorityBorderColor, getPriorityOption, type TaskPriority } from '../types/priority'
 import CommentComposer from './CommentComposer'
 import PriorityPicker from './PriorityPicker'
@@ -12,6 +13,11 @@ interface TaskRowProps {
   task: Task
   expanded: boolean
   doubleClickRename: boolean
+  autoEditTitle?: boolean
+  stackPosition?: 'only' | 'first' | 'middle' | 'last'
+  seamGapAbove?: boolean
+  seamGapBelow?: boolean
+  onAutoEditConsumed?: () => void
   onToggleExpand: (task: Task) => void
   onToggleDone: (task: Task) => void
   onSetPriority: (task: Task, priority: TaskPriority) => void
@@ -24,6 +30,11 @@ export default function TaskRow({
   task,
   expanded,
   doubleClickRename,
+  autoEditTitle = false,
+  stackPosition,
+  seamGapAbove = false,
+  seamGapBelow = false,
+  onAutoEditConsumed,
   onToggleExpand,
   onToggleDone,
   onSetPriority,
@@ -56,6 +67,19 @@ export default function TaskRow({
       inputRef.current?.select()
     }
   }, [editing])
+
+  useEffect(() => {
+    if (!autoEditTitle) {
+      return
+    }
+    if (clickTimeoutRef.current) {
+      clearTimeout(clickTimeoutRef.current)
+      clickTimeoutRef.current = null
+    }
+    setDraft(task.title)
+    setEditing(true)
+    onAutoEditConsumed?.()
+  }, [autoEditTitle, onAutoEditConsumed, task.id, task.title])
 
   useEffect(() => {
     return () => {
@@ -100,10 +124,10 @@ export default function TaskRow({
   }
 
   async function commitRename() {
-    const next = draft.trim()
+    const next = draft.trim() || DEFAULT_TASK_TITLE
     setEditing(false)
-    if (!next || next === task.title) {
-      setDraft(task.title)
+    setDraft(next)
+    if (next === task.title) {
       return
     }
     await onRenameTitle(task, next)
@@ -132,12 +156,35 @@ export default function TaskRow({
       ? 'bg-[#F0FDF4] opacity-100'
       : 'bg-white opacity-100'
 
+  const stackRadiusClass = (() => {
+    const roundTop =
+      seamGapAbove || stackPosition === 'only' || stackPosition === 'first' || stackPosition === undefined
+    const roundBottom =
+      seamGapBelow || stackPosition === 'only' || stackPosition === 'last' || stackPosition === undefined
+    if (roundTop && roundBottom) {
+      return 'rounded-2xl'
+    }
+    if (roundTop) {
+      return 'rounded-t-2xl rounded-b-none'
+    }
+    if (roundBottom) {
+      return 'rounded-b-2xl rounded-t-none'
+    }
+    return 'rounded-none'
+  })()
+
+  const stackShadowClass =
+    stackPosition === 'middle' || stackPosition === 'first'
+      ? 'shadow-none'
+      : 'shadow-card'
+
   return (
     <>
       <div
         ref={setNodeRef}
+        data-task-id={task.id}
         style={cardStyle}
-        className={`overflow-visible rounded-2xl border shadow-card transition-[opacity,background-color,border-color,box-shadow] duration-300 ease-out ${cardBorderClass} ${cardBgClass}`}
+        className={`overflow-visible border ${stackRadiusClass} ${stackShadowClass} transition-[opacity,background-color,border-color,box-shadow] duration-300 ease-out ${cardBorderClass} ${cardBgClass}`}
         onContextMenu={handleContextMenu}
       >
         <div className="flex cursor-pointer items-center gap-3 px-4 py-3" onClick={handleRowClick}>

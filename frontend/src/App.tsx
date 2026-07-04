@@ -16,20 +16,34 @@ import {
   updateTaskTitle,
 } from './api/board'
 import RecycleBin from './components/RecycleBin'
+import ActivityLog from './components/ActivityLog'
 import Settings from './components/Settings'
 import Sidebar from './components/Sidebar'
-import TaskBoard, { buildReorderPayload } from './components/TaskBoard'
+import TaskBoard, { buildReorderPayload, insertTaskInGroup } from './components/TaskBoard'
+import ToastContainer from './components/ToastContainer'
+import ZoomControl from './components/ZoomControl'
+import { useActivityNotifications } from './hooks/useActivityNotifications'
 import { useTaskFilters } from './hooks/useTaskFilters'
 import { useSettings } from './hooks/useSettings'
+import { useZoom } from './hooks/useZoom'
 import type { ActiveView, Board, Task } from './types/board'
-import type { TaskPriority } from './types/priority'
+import { getPriorityOption, type TaskPriority } from './types/priority'
+import type { AppSettings } from './types/settings'
+import { DEFAULT_TASK_TITLE } from './constants/tasks'
+import { truncateActivityText } from './utils/activityLog'
+
+function groupNameFor(board: Board, groupId: number | null | undefined) {
+  if (groupId == null) {
+    return undefined
+  }
+  return board.groups.find((group) => group.id === groupId)?.name
+}
 
 export default function App() {
   const [board, setBoard] = useState<Board>({ groups: [], tasks: [] })
   const [deletedTasks, setDeletedTasks] = useState<Task[]>([])
   const [activeView, setActiveView] = useState<ActiveView>('all')
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { settings, updateSetting } = useSettings()
   const {
@@ -39,6 +53,9 @@ export default function App() {
     setPriorityFilter,
     clearFilters,
   } = useTaskFilters()
+  const { zoom, setZoom, decrease, increase, reset } = useZoom()
+  const { toasts, beginActivity, completeActivity, failActivity, dismissToast, activityEntries, clearActivityLog } =
+    useActivityNotifications()
 
   const loadBoard = useCallback(async () => {
     setError(null)
@@ -67,8 +84,25 @@ export default function App() {
     [groupedTasks],
   )
 
+  const handleUpdateSetting = useCallback(
+    <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
+      const toastId = beginActivity()
+      updateSetting(key, value)
+      completeActivity(toastId, 'Settings saved', {
+        detail:
+          key === 'doubleClickRename'
+            ? value
+              ? 'Rename · double-click enabled'
+              : 'Rename · right-click only'
+            : undefined,
+      })
+    },
+    [beginActivity, completeActivity, updateSetting],
+  )
+
   const handleToggleDone = useCallback(async (task: Task) => {
     const nextDone = !task.done
+    const toastId = beginActivity()
 
     setBoard((current) => ({
       ...current,
@@ -77,7 +111,6 @@ export default function App() {
       ),
     }))
 
-    setSaving(true)
     try {
       const updated = await toggleDone(task.id, nextDone)
       setBoard((current) => ({
@@ -86,6 +119,11 @@ export default function App() {
           item.id === updated.id ? mergeTaskUpdate(item, updated) : item,
         ),
       }))
+      completeActivity(toastId, nextDone ? 'Task completed' : 'Task reopened', {
+        subject: task.title,
+        from: nextDone ? 'Open' : 'Completed',
+        to: nextDone ? 'Completed' : 'Open',
+      })
     } catch (err) {
       setBoard((current) => ({
         ...current,
@@ -94,13 +132,13 @@ export default function App() {
         ),
       }))
       setError(err instanceof Error ? err.message : 'Failed to update task')
-    } finally {
-      setSaving(false)
+      failActivity(toastId, 'Failed to update task')
     }
-  }, [])
+  }, [beginActivity, completeActivity, failActivity])
 
   const handleSetPriority = useCallback(async (task: Task, priority: TaskPriority) => {
     const previous = task.priority ?? 'NONE'
+    const toastId = beginActivity()
 
     setBoard((current) => ({
       ...current,
@@ -109,7 +147,6 @@ export default function App() {
       ),
     }))
 
-    setSaving(true)
     try {
       const updated = await setPriority(task.id, priority)
       setBoard((current) => ({
@@ -118,6 +155,11 @@ export default function App() {
           item.id === updated.id ? mergeTaskUpdate(item, updated) : item,
         ),
       }))
+      completeActivity(toastId, 'Priority updated', {
+        subject: task.title,
+        from: getPriorityOption(previous).label,
+        to: getPriorityOption(priority).label,
+      })
     } catch (err) {
       setBoard((current) => ({
         ...current,
@@ -126,48 +168,55 @@ export default function App() {
         ),
       }))
       setError(err instanceof Error ? err.message : 'Failed to update priority')
-    } finally {
-      setSaving(false)
+      failActivity(toastId, 'Failed to update priority')
     }
-  }, [])
+  }, [beginActivity, completeActivity, failActivity])
 
   const handleReorder = useCallback(async (tasks: Task[]) => {
-    setSaving(true)
+    const toastId = beginActivity()
     try {
       const items = buildReorderPayload(tasks)
       const updated = await reorderTasks(items)
       setBoard(updated)
+      completeActivity(toastId, 'Task order saved', { detail: 'Drag-and-drop reorder' })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save order')
+      failActivity(toastId, 'Failed to save order')
       await loadBoard()
-    } finally {
-      setSaving(false)
     }
-  }, [loadBoard])
+  }, [beginActivity, completeActivity, failActivity, loadBoard])
 
   const handleRenameGroup = useCallback(async (groupId: number, name: string) => {
+    const previousName = board.groups.find((group) => group.id === groupId)?.name
+    if (previousName === name) {
+      return
+    }
+
+    const toastId = beginActivity()
     setBoard((current) => ({
       ...current,
       groups: current.groups.map((group) => (group.id === groupId ? { ...group, name } : group)),
     }))
 
-    setSaving(true)
     try {
       const updated = await renameGroup(groupId, name)
       setBoard((current) => ({
         ...current,
         groups: current.groups.map((group) => (group.id === groupId ? updated : group)),
       }))
+      completeActivity(toastId, 'Project renamed', {
+        from: previousName,
+        to: name,
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to rename project')
+      failActivity(toastId, 'Failed to rename project')
       await loadBoard()
-    } finally {
-      setSaving(false)
     }
-  }, [loadBoard])
+  }, [beginActivity, board.groups, completeActivity, failActivity, loadBoard])
 
   const handleCreateGroup = useCallback(async (name: string) => {
-    setSaving(true)
+    const toastId = beginActivity()
     try {
       const created = await createGroup(name)
       setBoard((current) => ({
@@ -175,14 +224,16 @@ export default function App() {
         groups: [...current.groups, created],
       }))
       setActiveView(created.id)
+      completeActivity(toastId, 'Project created', { subject: name })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create project')
-    } finally {
-      setSaving(false)
+      failActivity(toastId, 'Failed to create project')
     }
-  }, [])
+  }, [beginActivity, completeActivity, failActivity])
 
   const handleDeleteGroup = useCallback(async (groupId: number) => {
+    const groupName = board.groups.find((group) => group.id === groupId)?.name
+    const toastId = beginActivity()
     setBoard((current) => ({
       ...current,
       groups: current.groups.filter((group) => group.id !== groupId),
@@ -190,44 +241,71 @@ export default function App() {
     }))
     setActiveView((current) => (current === groupId ? 'all' : current))
 
-    setSaving(true)
     try {
       await deleteGroup(groupId)
       const recycleData = await getRecycleBin()
       setDeletedTasks(recycleData.tasks)
+      completeActivity(toastId, 'Project deleted', { subject: groupName })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete project')
+      failActivity(toastId, 'Failed to delete project')
       await loadBoard()
-    } finally {
-      setSaving(false)
     }
-  }, [loadBoard])
+  }, [beginActivity, board.groups, completeActivity, failActivity, loadBoard])
 
-  const handleCreateTask = useCallback(async (groupId: number) => {
-    setSaving(true)
+  const handleCreateTask = useCallback(async (groupId: number, insertAtIndex?: number): Promise<Task | null> => {
+    const projectName = groupNameFor(board, groupId)
+    const toastId = beginActivity()
     try {
-      const created = await createTask('New task', groupId)
-      setBoard((current) => ({
-        ...current,
-        tasks: [...current.tasks, { ...created, comments: [] }],
-        groups: current.groups.map((group) =>
-          group.id === groupId ? { ...group, taskCount: group.taskCount + 1 } : group,
-        ),
-      }))
+      const created = await createTask(DEFAULT_TASK_TITLE, groupId)
+      const task = { ...created, comments: [] }
+      let nextTasks: Task[] = []
+
+      setBoard((current) => {
+        let tasks = [...current.tasks, task]
+        if (insertAtIndex != null) {
+          tasks = insertTaskInGroup(tasks, task, groupId, insertAtIndex)
+        }
+        nextTasks = tasks
+        return {
+          ...current,
+          tasks,
+          groups: current.groups.map((group) =>
+            group.id === groupId ? { ...group, taskCount: group.taskCount + 1 } : group,
+          ),
+        }
+      })
+
+      if (insertAtIndex != null) {
+        await reorderTasks(buildReorderPayload(nextTasks))
+      }
+
+      completeActivity(toastId, 'Task created', {
+        subject: DEFAULT_TASK_TITLE,
+        detail: projectName ? `Project · ${projectName}` : undefined,
+      })
+      return task
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create task')
-    } finally {
-      setSaving(false)
+      failActivity(toastId, 'Failed to create task')
+      await loadBoard()
+      return null
     }
-  }, [])
+  }, [beginActivity, board, completeActivity, failActivity, loadBoard])
 
   const handleRenameTask = useCallback(async (task: Task, title: string) => {
+    if (title === task.title) {
+      return
+    }
+
+    const previousTitle = task.title
+    const projectName = groupNameFor(board, task.groupId)
+    const toastId = beginActivity()
     setBoard((current) => ({
       ...current,
       tasks: current.tasks.map((item) => (item.id === task.id ? { ...item, title } : item)),
     }))
 
-    setSaving(true)
     try {
       const updated = await updateTaskTitle(task.id, title)
       setBoard((current) => ({
@@ -236,6 +314,11 @@ export default function App() {
           item.id === updated.id ? mergeTaskUpdate(item, updated) : item,
         ),
       }))
+      completeActivity(toastId, 'Task renamed', {
+        from: previousTitle,
+        to: title,
+        detail: projectName ? `Project · ${projectName}` : undefined,
+      })
     } catch (err) {
       setBoard((current) => ({
         ...current,
@@ -244,13 +327,12 @@ export default function App() {
         ),
       }))
       setError(err instanceof Error ? err.message : 'Failed to rename task')
-    } finally {
-      setSaving(false)
+      failActivity(toastId, 'Failed to rename task')
     }
-  }, [])
+  }, [beginActivity, board, completeActivity, failActivity])
 
   const handleAddComment = useCallback(async (task: Task, text: string) => {
-    setSaving(true)
+    const toastId = beginActivity()
     try {
       const comment = await addComment(task.id, text)
       setBoard((current) => ({
@@ -261,15 +343,20 @@ export default function App() {
             : item,
         ),
       }))
+      completeActivity(toastId, 'Comment added', {
+        subject: task.title,
+        detail: truncateActivityText(text),
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add comment')
+      failActivity(toastId, 'Failed to add comment')
       throw err
-    } finally {
-      setSaving(false)
     }
-  }, [])
+  }, [beginActivity, completeActivity, failActivity])
 
   const handleDeleteTask = useCallback(async (task: Task) => {
+    const toastId = beginActivity()
+    const projectName = groupNameFor(board, task.groupId)
     setBoard((current) => ({
       ...current,
       tasks: current.tasks.filter((item) => item.id !== task.id),
@@ -278,23 +365,26 @@ export default function App() {
       ),
     }))
 
-    setSaving(true)
     try {
       await deleteTask(task.id)
       const recycleData = await getRecycleBin()
       setDeletedTasks(recycleData.tasks)
+      completeActivity(toastId, 'Task moved to Recycle Bin', {
+        subject: task.title,
+        detail: projectName ? `Project · ${projectName}` : undefined,
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete task')
+      failActivity(toastId, 'Failed to delete task')
       await loadBoard()
-    } finally {
-      setSaving(false)
     }
-  }, [loadBoard])
+  }, [beginActivity, board, completeActivity, failActivity, loadBoard])
 
   const handleRestoreTask = useCallback(async (task: Task) => {
+    const toastId = beginActivity()
+    const projectName = groupNameFor(board, task.groupId)
     setDeletedTasks((current) => current.filter((item) => item.id !== task.id))
 
-    setSaving(true)
     try {
       const restored = await restoreTask(task.id)
       setBoard((current) => ({
@@ -304,13 +394,16 @@ export default function App() {
           group.id === restored.groupId ? { ...group, taskCount: group.taskCount + 1 } : group,
         ),
       }))
+      completeActivity(toastId, 'Task restored', {
+        subject: task.title,
+        detail: projectName ? `Project · ${projectName}` : undefined,
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to restore task')
+      failActivity(toastId, 'Failed to restore task')
       await loadBoard()
-    } finally {
-      setSaving(false)
     }
-  }, [loadBoard])
+  }, [beginActivity, board, completeActivity, failActivity, loadBoard])
 
   if (loading) {
     return (
@@ -327,24 +420,12 @@ export default function App() {
         activeView={activeView}
         totalOpen={openCount}
         recycleCount={deletedTasks.length}
+        activityCount={activityEntries.length}
         onSelectView={setActiveView}
         onCreateGroup={handleCreateGroup}
         onRenameGroup={handleRenameGroup}
         onDeleteGroup={handleDeleteGroup}
       />
-
-      {saving && (
-        <div
-          className="pointer-events-none fixed left-[280px] top-4 z-50 flex items-center gap-2 rounded-full border border-surface-border bg-white/95 px-3 py-1.5 text-xs font-medium text-surface-text shadow-card backdrop-blur-sm"
-          aria-live="polite"
-        >
-          <span className="relative flex h-2.5 w-2.5 shrink-0">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
-            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-green-500" />
-          </span>
-          Saving
-        </div>
-      )}
 
       {error && (
         <div className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-xl bg-red-50 px-4 py-2 text-sm text-red-600 shadow-card">
@@ -352,32 +433,48 @@ export default function App() {
         </div>
       )}
 
-      {activeView === 'settings' ? (
-        <Settings settings={settings} onUpdateSetting={updateSetting} />
-      ) : activeView === 'recycle' ? (
-        <RecycleBin tasks={deletedTasks} groups={board.groups} onRestore={handleRestoreTask} />
-      ) : (
-        <TaskBoard
-          groups={board.groups}
-          tasks={groupedTasks}
-          activeGroupId={activeView === 'all' ? 'all' : activeView}
-          doubleClickRename={settings.doubleClickRename}
-          onToggleDone={handleToggleDone}
-          onSetPriority={handleSetPriority}
-          onReorder={handleReorder}
-          onRenameGroup={handleRenameGroup}
-          onRenameTask={handleRenameTask}
-          onCreateTask={handleCreateTask}
-          onAddComment={handleAddComment}
-          onDeleteTask={handleDeleteTask}
-          onSelectGroup={setActiveView}
-          searchQuery={searchQuery}
-          priorityFilter={priorityFilter}
-          onSearchChange={setSearchQuery}
-          onPriorityChange={setPriorityFilter}
-          onClearFilters={clearFilters}
+      <div className="relative flex min-h-screen min-w-0 flex-1 flex-col">
+        <div className="flex-1 overflow-y-auto" style={{ zoom: zoom / 100 }}>
+          {activeView === 'settings' ? (
+            <Settings settings={settings} onUpdateSetting={handleUpdateSetting} />
+          ) : activeView === 'activity' ? (
+            <ActivityLog entries={activityEntries} onClear={clearActivityLog} />
+          ) : activeView === 'recycle' ? (
+            <RecycleBin tasks={deletedTasks} groups={board.groups} onRestore={handleRestoreTask} />
+          ) : (
+            <TaskBoard
+              groups={board.groups}
+              tasks={groupedTasks}
+              activeGroupId={activeView === 'all' ? 'all' : activeView}
+              doubleClickRename={settings.doubleClickRename}
+              onToggleDone={handleToggleDone}
+              onSetPriority={handleSetPriority}
+              onReorder={handleReorder}
+              onRenameGroup={handleRenameGroup}
+              onRenameTask={handleRenameTask}
+              onCreateTask={handleCreateTask}
+              onAddComment={handleAddComment}
+              onDeleteTask={handleDeleteTask}
+              onSelectGroup={setActiveView}
+              searchQuery={searchQuery}
+              priorityFilter={priorityFilter}
+              onSearchChange={setSearchQuery}
+              onPriorityChange={setPriorityFilter}
+              onClearFilters={clearFilters}
+            />
+          )}
+        </div>
+
+        <ZoomControl
+          zoom={zoom}
+          onZoomChange={setZoom}
+          onDecrease={decrease}
+          onIncrease={increase}
+          onReset={reset}
         />
-      )}
+      </div>
+
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   )
 }

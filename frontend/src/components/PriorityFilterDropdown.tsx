@@ -79,43 +79,54 @@ export default function PriorityFilterDropdown({ value, onChange }: PriorityFilt
 
   return (
     <>
-      <button
-        ref={buttonRef}
-        type="button"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label={`Priority filter: ${getFilterLabel(value)}`}
-        onClick={() => {
-          if (open) {
-            setOpen(false)
-            return
-          }
-          updateMenuPosition()
-          setOpen(true)
-        }}
-        className={`flex shrink-0 items-center gap-1.5 rounded-r-xl py-2.5 pl-3 pr-2.5 text-xs font-medium transition outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-100 ${
-          open || isFiltered ? 'bg-[#FAFAFB] text-surface-text' : 'text-surface-muted hover:bg-[#FAFAFB]'
+      <div
+        className={`flex h-full shrink-0 items-center rounded-r-2xl transition-colors ${
+          open || isFiltered ? 'bg-[#FAFAFB]' : 'hover:bg-[#FAFAFB]/60'
         }`}
       >
-        {isFiltered && currentColor && (
-          <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: currentColor }} />
-        )}
-        <span className="max-w-[6.5rem] truncate">{getFilterLabel(value)}</span>
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className={`shrink-0 text-[#A0A0AC] transition-transform duration-150 ${open ? 'rotate-180' : ''}`}
-          aria-hidden="true"
+        <button
+          ref={buttonRef}
+          type="button"
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-label={`Priority filter: ${getFilterLabel(value)}`}
+          onClick={() => {
+            if (open) {
+              setOpen(false)
+              return
+            }
+            updateMenuPosition()
+            setOpen(true)
+          }}
+          className={`flex h-full items-center gap-2 px-4 text-xs font-medium transition outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-100 ${
+            open || isFiltered ? 'text-surface-text' : 'text-surface-muted'
+          }`}
         >
-          <path d="m6 9 6 6 6-6" />
-        </svg>
-      </button>
+          <span
+            className="h-2 w-2 shrink-0 rounded-full"
+            style={{
+              backgroundColor: currentColor ?? '#D5D5DE',
+              opacity: isFiltered ? 1 : 0.55,
+            }}
+            aria-hidden="true"
+          />
+          <span className="max-w-[6.5rem] truncate">{getFilterLabel(value)}</span>
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={`shrink-0 text-[#A0A0AC] transition-transform duration-150 ${open ? 'rotate-180' : ''}`}
+            aria-hidden="true"
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </button>
+      </div>
 
       {open && menuPos
         ? createPortal(

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ActiveView, TaskGroup } from '../types/board'
 import ProjectContextMenu from './ProjectContextMenu'
 
@@ -7,10 +7,31 @@ interface SidebarProps {
   activeView: ActiveView
   totalOpen: number
   recycleCount: number
+  activityCount: number
   onSelectView: (view: ActiveView) => void
   onCreateGroup: (name: string) => Promise<void>
   onRenameGroup: (groupId: number, name: string) => Promise<void>
   onDeleteGroup: (groupId: number) => Promise<void>
+}
+
+function isEditableTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+  const tag = target.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable
+}
+
+function blurFocusedElement() {
+  if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur()
+  }
+}
+
+function tabClass(isActive: boolean) {
+  return isActive
+    ? 'border-l-[#7C5CFC] bg-[#EDE9FE] font-semibold text-[#5B3FD6] shadow-sm'
+    : 'border-l-transparent bg-transparent font-normal text-[#55556A] hover:bg-[#FAFAFB]'
 }
 
 export default function Sidebar({
@@ -18,6 +39,7 @@ export default function Sidebar({
   activeView,
   totalOpen,
   recycleCount,
+  activityCount,
   onSelectView,
   onCreateGroup,
   onRenameGroup,
@@ -32,6 +54,11 @@ export default function Sidebar({
   const createInputRef = useRef<HTMLInputElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
 
+  const navViews = useMemo<ActiveView[]>(
+    () => ['all', ...groups.map((group) => group.id), 'recycle', 'activity', 'settings'],
+    [groups],
+  )
+
   useEffect(() => {
     if (creatingProject) {
       createInputRef.current?.focus()
@@ -44,6 +71,51 @@ export default function Sidebar({
       editInputRef.current?.select()
     }
   }, [editingGroupId])
+
+  useEffect(() => {
+    const activeItem = document.querySelector(`[data-sidebar-view="${String(activeView)}"]`)
+    activeItem?.scrollIntoView({ block: 'nearest' })
+  }, [activeView])
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') {
+        return
+      }
+      if (isEditableTarget(event.target)) {
+        return
+      }
+      if (creatingProject || editingGroupId != null) {
+        return
+      }
+
+      const currentIndex = navViews.findIndex((view) => view === activeView)
+      if (currentIndex === -1) {
+        return
+      }
+
+      const nextIndex =
+        event.key === 'ArrowUp'
+          ? Math.max(0, currentIndex - 1)
+          : Math.min(navViews.length - 1, currentIndex + 1)
+
+      if (nextIndex === currentIndex) {
+        return
+      }
+
+      event.preventDefault()
+      blurFocusedElement()
+
+      const nextView = navViews[nextIndex]
+      if (typeof nextView === 'number') {
+        setProjectsExpanded(true)
+      }
+      onSelectView(nextView)
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [activeView, creatingProject, editingGroupId, navViews, onSelectView])
 
   async function commitCreate() {
     const name = newProjectName.trim()
@@ -93,22 +165,45 @@ export default function Sidebar({
 
       <button
         type="button"
+        data-sidebar-view="all"
+        aria-current={activeView === 'all' ? 'page' : undefined}
         onClick={() => onSelectView('all')}
-        className={`mb-6 flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition ${navItemClass} ${
-          activeView === 'all'
-            ? 'bg-brand-50 text-brand-600'
-            : 'text-surface-text hover:bg-[#FAFAFB]'
-        }`}
+        className={`mb-6 flex w-full items-center justify-between rounded-xl border-l-[3px] py-2.5 pl-2.5 pr-3 text-sm transition ${navItemClass} ${tabClass(activeView === 'all')}`}
       >
-        <span className="flex items-center gap-2">
-          <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-brand-500 text-[10px] text-white">
-            ✓
-          </span>
+        <span className="flex items-center gap-2.5">
+          {activeView === 'all' ? (
+            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[#7C5CFC] text-white">
+              <svg
+                width="11"
+                height="11"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            </span>
+          ) : (
+            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[#ECECF0] text-[#8E8E98]">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="3" width="7" height="7" rx="1" />
+                <rect x="14" y="3" width="7" height="7" rx="1" />
+                <rect x="3" y="14" width="7" height="7" rx="1" />
+                <rect x="14" y="14" width="7" height="7" rx="1" />
+              </svg>
+            </span>
+          )}
           All
         </span>
         <span
-          className={`rounded-full px-2 py-0.5 text-xs ${
-            activeView === 'all' ? 'bg-brand-500 text-white' : 'bg-[#EEEEF2] text-surface-muted'
+          className={`rounded-full px-2 py-0.5 text-xs font-medium tabular-nums ${
+            activeView === 'all'
+              ? 'bg-[#7C5CFC] text-white'
+              : 'bg-[#EEEEF2] text-[#8E8E98]'
           }`}
         >
           {totalOpen}
@@ -178,16 +273,14 @@ export default function Sidebar({
               ) : (
                 <button
                   type="button"
+                  data-sidebar-view={group.id}
+                  aria-current={activeView === group.id ? 'page' : undefined}
                   onClick={() => onSelectView(group.id)}
                   onContextMenu={(event) => {
                     event.preventDefault()
                     setMenu({ group, x: event.clientX, y: event.clientY })
                   }}
-                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition ${navItemClass} ${
-                    activeView === group.id
-                      ? 'bg-[#FAFAFB] font-medium text-surface-text'
-                      : 'text-[#55556A] hover:bg-[#FAFAFB]'
-                  }`}
+                  className={`flex w-full items-center gap-3 rounded-xl border-l-[3px] py-2 pl-2.5 pr-3 text-left text-sm transition ${navItemClass} ${tabClass(activeView === group.id)}`}
                 >
                   <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: group.color }} />
                   <span className="min-w-0 flex-1 truncate">{group.name}</span>
@@ -225,12 +318,10 @@ export default function Sidebar({
       <div className="mt-auto space-y-1 border-t border-surface-border pt-4">
         <button
           type="button"
+          data-sidebar-view="recycle"
+          aria-current={activeView === 'recycle' ? 'page' : undefined}
           onClick={() => onSelectView('recycle')}
-          className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition ${navItemClass} ${
-            activeView === 'recycle'
-              ? 'bg-[#FAFAFB] font-medium text-surface-text'
-              : 'text-[#55556A] hover:bg-[#FAFAFB]'
-          }`}
+          className={`flex w-full items-center justify-between rounded-xl border-l-[3px] py-2.5 pl-2.5 pr-3 text-sm transition ${navItemClass} ${tabClass(activeView === 'recycle')}`}
         >
           <span className="flex items-center gap-2">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -245,12 +336,31 @@ export default function Sidebar({
 
         <button
           type="button"
+          data-sidebar-view="activity"
+          aria-current={activeView === 'activity' ? 'page' : undefined}
+          onClick={() => onSelectView('activity')}
+          className={`flex w-full items-center justify-between rounded-xl border-l-[3px] py-2.5 pl-2.5 pr-3 text-sm transition ${navItemClass} ${tabClass(activeView === 'activity')}`}
+        >
+          <span className="flex items-center gap-2">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 8v4l3 3" />
+              <circle cx="12" cy="12" r="9" />
+            </svg>
+            Activity Log
+          </span>
+          {activityCount > 0 && (
+            <span className="rounded-full bg-[#EEEEF2] px-2 py-0.5 text-xs tabular-nums text-surface-muted">
+              {activityCount}
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          data-sidebar-view="settings"
+          aria-current={activeView === 'settings' ? 'page' : undefined}
           onClick={() => onSelectView('settings')}
-          className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition ${navItemClass} ${
-            activeView === 'settings'
-              ? 'bg-[#FAFAFB] font-medium text-surface-text'
-              : 'text-[#55556A] hover:bg-[#FAFAFB]'
-          }`}
+          className={`flex w-full items-center gap-2 rounded-xl border-l-[3px] py-2.5 pl-2.5 pr-3 text-sm transition ${navItemClass} ${tabClass(activeView === 'settings')}`}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="12" cy="12" r="3" />

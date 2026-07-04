@@ -44,6 +44,6 @@ export interface TaskReorderItem {
   sortOrder: number
 }
 
-export type ActiveView = number | 'all' | 'recycle' | 'settings'
+export type ActiveView = number | 'all' | 'recycle' | 'activity' | 'settings'
 
 export type { TaskPriority } from './priority'

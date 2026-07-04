@@ -14,9 +14,9 @@ import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-ki
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Task, TaskGroup } from '../types/board'
 import type { TaskPriority } from '../types/priority'
-import AddCardButton from './AddCardButton'
 import GroupHeader from './GroupHeader'
 import { ProjectCarouselFrame } from './ProjectCarousel'
+import TaskListInsertGutters, { type SeamHoverState } from './TaskListInsertGutters'
 import TaskRow from './TaskRow'
 import TaskSearchBar from './TaskSearchBar'
 import type { PriorityFilterValue } from '../hooks/useTaskFilters'
@@ -32,7 +32,7 @@ interface TaskBoardProps {
   onReorder: (tasks: Task[]) => Promise<void>
   onRenameGroup: (groupId: number, name: string) => Promise<void>
   onRenameTask: (task: Task, title: string) => Promise<void>
-  onCreateTask: (groupId: number) => Promise<void>
+  onCreateTask: (groupId: number, insertAtIndex?: number) => Promise<Task | null>
   onAddComment: (task: Task, text: string) => Promise<void>
   onDeleteTask: (task: Task) => Promise<void>
   onSelectGroup: (groupId: number) => void
@@ -88,6 +88,42 @@ function normalizeSortOrders(tasks: Task[]): Task[] {
   })
 }
 
+function resolveInsertIndex(
+  tasks: Task[],
+  groupId: number,
+  visibleInsertIndex: number,
+  searchQuery: string,
+  priorityFilter: PriorityFilterValue,
+) {
+  const fullList = groupTasks(tasks, groupId, '', 'ALL')
+  const visibleList = groupTasks(tasks, groupId, searchQuery, priorityFilter)
+
+  if (visibleList.length === 0) {
+    return 0
+  }
+  if (visibleInsertIndex <= 0) {
+    return fullList.findIndex((task) => task.id === visibleList[0].id)
+  }
+  if (visibleInsertIndex >= visibleList.length) {
+    return fullList.findIndex((task) => task.id === visibleList[visibleList.length - 1].id) + 1
+  }
+  return fullList.findIndex((task) => task.id === visibleList[visibleInsertIndex].id)
+}
+
+function insertTaskInGroup(tasks: Task[], task: Task, groupId: number, insertAtIndex: number): Task[] {
+  const groupList = tasks
+    .filter((item) => item.groupId === groupId)
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+  const withoutNew = groupList.filter((item) => item.id !== task.id)
+  const index = Math.min(Math.max(insertAtIndex, 0), withoutNew.length)
+  withoutNew.splice(index, 0, task)
+  const orderMap = new Map(withoutNew.map((item, idx) => [item.id, idx]))
+  const withNew = tasks.some((item) => item.id === task.id) ? tasks : [...tasks, task]
+  return withNew.map((item) =>
+    item.groupId === groupId ? { ...item, sortOrder: orderMap.get(item.id) ?? item.sortOrder } : item,
+  )
+}
+
 export default function TaskBoard({
   groups,
   tasks,
@@ -111,6 +147,9 @@ export default function TaskBoard({
   const [localTasks, setLocalTasks] = useState(tasks)
   const [activeTask, setActiveTask] = useState<Task | null>(null)
   const [expandedTaskId, setExpandedTaskId] = useState<number | null>(null)
+  const [autoEditTaskId, setAutoEditTaskId] = useState<number | null>(null)
+  const [seamHover, setSeamHover] = useState<SeamHoverState | null>(null)
+  const [seamGapOpen, setSeamGapOpen] = useState<SeamHoverState | null>(null)
 
   const tasksSignature = useMemo(
     () =>
@@ -128,6 +167,15 @@ export default function TaskBoard({
   }, [tasksSignature, tasks])
 
   useEffect(() => {
+    if (!seamHover) {
+      setSeamGapOpen(null)
+      return
+    }
+    const timer = setTimeout(() => setSeamGapOpen(seamHover), 120)
+    return () => clearTimeout(timer)
+  }, [seamHover])
+
+  useEffect(() => {
     if (expandedTaskId != null && !tasks.some((task) => task.id === expandedTaskId)) {
       setExpandedTaskId(null)
     }
@@ -136,6 +184,15 @@ export default function TaskBoard({
   useEffect(() => {
     setExpandedTaskId(null)
   }, [activeGroupId])
+
+  useEffect(() => {
+    if (autoEditTaskId == null) {
+      return
+    }
+    requestAnimationFrame(() => {
+      document.querySelector(`[data-task-id="${autoEditTaskId}"]`)?.scrollIntoView({ block: 'nearest' })
+    })
+  }, [autoEditTaskId])
 
   useEffect(() => {
     if (expandedTaskId == null) {
@@ -187,6 +244,27 @@ export default function TaskBoard({
 
   const isCarouselView = activeGroupId !== 'all' && activeGroupIndex >= 0
 
+  function handleCreateTask(groupId: number, insertAtIndex?: number) {
+    void (async () => {
+      const created = await onCreateTask(groupId, insertAtIndex)
+      if (created) {
+        setExpandedTaskId(null)
+        setAutoEditTaskId(created.id)
+      }
+    })()
+  }
+
+  function handleCreateTaskAt(groupId: number, visibleInsertIndex: number) {
+    const insertAtIndex = resolveInsertIndex(
+      localTasks,
+      groupId,
+      visibleInsertIndex,
+      searchQuery,
+      priorityFilter,
+    )
+    handleCreateTask(groupId, insertAtIndex)
+  }
+
   function renderGroupSection(group: TaskGroup, index: number) {
     const groupTasksList = groupTasks(localTasks, group.id, searchQuery, priorityFilter)
     const groupHasTasks = groupTasks(localTasks, group.id, '', 'ALL').length > 0
@@ -195,7 +273,7 @@ export default function TaskBoard({
         key={group.id}
         className={index > 0 && !isCarouselView ? 'mt-5 border-t border-[#EBEBF0] pt-5' : ''}
       >
-        <GroupHeader group={group} onRename={onRenameGroup} onAddTask={(groupId) => void onCreateTask(groupId)} />
+        <GroupHeader group={group} onRename={onRenameGroup} onAddTask={handleCreateTask} />
         <SortableContext
           id={`group-${group.id}`}
           items={groupTasksList.map((task) => `task-${task.id}`)}
@@ -209,28 +287,77 @@ export default function TaskBoard({
                   : 'Drop tasks here'}
               </p>
             ) : (
-              groupTasksList.map((task) => (
-                <TaskRow
-                  key={task.id}
-                  task={task}
-                  expanded={expandedTaskId === task.id}
-                  doubleClickRename={doubleClickRename}
-                  onToggleExpand={handleToggleExpand}
-                  onToggleDone={handleToggleDone}
-                  onSetPriority={handleSetPriority}
-                  onRenameTitle={handleRenameTask}
-                  onAddComment={handleAddComment}
-                  onDelete={handleDeleteTask}
-                />
-              ))
+              <div className="relative -mx-14 overflow-visible px-14">
+                <TaskListInsertGutters
+                  disabled={activeTask != null}
+                  layoutRevision={seamGapOpen}
+                  onInsert={(insertIndex) => handleCreateTaskAt(group.id, insertIndex)}
+                  onSeamHoverChange={setSeamHover}
+                >
+                  {groupTasksList.map((task, taskIndex) => {
+                    const stackPosition =
+                      groupTasksList.length === 1
+                        ? 'only'
+                        : taskIndex === 0
+                          ? 'first'
+                          : taskIndex === groupTasksList.length - 1
+                            ? 'last'
+                            : 'middle'
+
+                    const openBefore =
+                      seamGapOpen != null &&
+                      seamGapOpen.insertIndex === taskIndex &&
+                      seamGapOpen.edge === 'top'
+                    const openAfter =
+                      seamGapOpen != null &&
+                      ((seamGapOpen.insertIndex === taskIndex + 1 && seamGapOpen.edge === 'top') ||
+                        (seamGapOpen.edge === 'bottom' &&
+                          seamGapOpen.insertIndex === groupTasksList.length &&
+                          taskIndex === groupTasksList.length - 1))
+                    const seamOpen = openBefore || openAfter
+
+                    return (
+                      <div
+                        key={task.id}
+                        className={`relative transition-all duration-200 ease-out ${
+                          openBefore ? 'mt-1' : taskIndex > 0 && !openAfter ? '-mt-px' : ''
+                        } ${openAfter ? 'mb-1' : ''} ${seamOpen ? 'opacity-[0.97]' : 'opacity-100'}`}
+                      >
+                        <span
+                          data-seam-insert={taskIndex}
+                          data-seam-edge="top"
+                          className="pointer-events-none absolute left-0 right-0 top-0 h-0"
+                        />
+                        <TaskRow
+                          task={task}
+                          expanded={expandedTaskId === task.id}
+                          doubleClickRename={doubleClickRename}
+                          autoEditTitle={autoEditTaskId === task.id}
+                          stackPosition={stackPosition}
+                          seamGapAbove={openBefore}
+                          seamGapBelow={openAfter}
+                          onAutoEditConsumed={() => setAutoEditTaskId(null)}
+                          onToggleExpand={handleToggleExpand}
+                          onToggleDone={handleToggleDone}
+                          onSetPriority={handleSetPriority}
+                          onRenameTitle={handleRenameTask}
+                          onAddComment={handleAddComment}
+                          onDelete={handleDeleteTask}
+                        />
+                        {taskIndex === groupTasksList.length - 1 && (
+                          <span
+                            data-seam-insert={groupTasksList.length}
+                            data-seam-edge="bottom"
+                            className="pointer-events-none absolute bottom-0 left-0 right-0 h-0"
+                          />
+                        )}
+                      </div>
+                    )
+                  })}
+                </TaskListInsertGutters>
+              </div>
             )}
 
-            <div className="group/add flex min-h-6 items-center justify-center">
-              <AddCardButton
-                onClick={() => void onCreateTask(group.id)}
-                className="opacity-0 transition group-hover/add:opacity-100"
-              />
-            </div>
           </GroupDropZone>
         </SortableContext>
       </section>
@@ -245,6 +372,7 @@ export default function TaskBoard({
   function handleDragStart(event: DragStartEvent) {
     const taskId = Number(String(event.active.id).replace('task-', ''))
     setActiveTask(localTasks.find((task) => task.id === taskId) ?? null)
+    setSeamHover(null)
   }
 
   function handleDragOver(event: DragOverEvent) {
@@ -367,13 +495,14 @@ export default function TaskBoard({
     if (filtersActive && visibleScopedCount === 0) {
       return (
         <div className="rounded-2xl border border-dashed border-surface-border bg-white px-6 py-12 text-center shadow-card">
-          <p className="text-sm text-surface-text">No tasks match your search or filter.</p>
+          <p className="text-sm font-medium text-surface-text">No tasks match your search or filter</p>
+          <p className="mt-1 text-xs text-surface-muted">Try a different keyword or priority.</p>
           <button
             type="button"
             onClick={onClearFilters}
-            className="mt-3 text-sm font-medium text-brand-600 transition hover:text-brand-700"
+            className="mt-4 rounded-lg px-3 py-1.5 text-sm font-medium text-brand-600 transition hover:bg-brand-50 hover:text-brand-700"
           >
-            Clear search & filter
+            Clear filters
           </button>
         </div>
       )
@@ -384,7 +513,7 @@ export default function TaskBoard({
 
   return (
     <main className="flex-1 overflow-y-auto px-8 py-8 sm:px-24">
-      <div className="mx-auto mb-6 w-full max-w-xl">
+      <div className="mx-auto mb-6 w-full max-w-xl px-1">
         <TaskSearchBar
           searchQuery={searchQuery}
           priorityFilter={priorityFilter}
@@ -415,33 +544,6 @@ export default function TaskBoard({
             >
               {renderBoardContent()}
             </ProjectCarouselFrame>
-
-            {(carouselNextGroup || carouselPrevGroup) && (
-              <div className="mx-auto mt-4 flex max-w-xl justify-between gap-3 sm:hidden">
-                {carouselPrevGroup ? (
-                  <button
-                    type="button"
-                    onClick={() => onSelectGroup(carouselPrevGroup.id)}
-                    className="truncate rounded-lg px-2 py-1 text-left text-xs text-surface-muted opacity-60 transition hover:opacity-100"
-                  >
-                    ← {carouselPrevGroup.name}
-                  </button>
-                ) : (
-                  <span />
-                )}
-                {carouselNextGroup ? (
-                  <button
-                    type="button"
-                    onClick={() => onSelectGroup(carouselNextGroup.id)}
-                    className="truncate rounded-lg px-2 py-1 text-right text-xs text-surface-muted opacity-60 transition hover:opacity-100"
-                  >
-                    {carouselNextGroup.name} →
-                  </button>
-                ) : (
-                  <span />
-                )}
-              </div>
-            )}
           </>
         ) : (
           <div className="mx-auto max-w-xl">{renderBoardContent()}</div>
@@ -459,14 +561,14 @@ export default function TaskBoard({
   )
 }
 
-export { buildReorderPayload }
+export { buildReorderPayload, insertTaskInGroup }
 
 function GroupDropZone({ groupId, children }: { groupId: number; children: ReactNode }) {
   const { setNodeRef, isOver } = useDroppable({ id: `group-${groupId}` })
   return (
     <div
       ref={setNodeRef}
-      className={`min-h-[48px] space-y-2 rounded-2xl border border-dashed p-1 transition ${
+      className={`min-h-[48px] rounded-2xl border border-dashed p-1 transition ${
         isOver ? 'border-brand-500 bg-brand-50/40' : 'border-transparent hover:border-[#E8E8EF]'
       }`}
     >
