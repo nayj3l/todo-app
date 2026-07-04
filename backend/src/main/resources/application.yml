@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: todo-backend
+  datasource:
+    url: jdbc:mysql://localhost:3307/todoapp
+    username: todo
+    password: todo
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+
+server:
+  port: 9090
+
+app:
+  backup:
+    path: ../data/backup/tasks.json
