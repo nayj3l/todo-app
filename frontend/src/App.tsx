@@ -19,6 +19,7 @@ import RecycleBin from './components/RecycleBin'
 import Settings from './components/Settings'
 import Sidebar from './components/Sidebar'
 import TaskBoard, { buildReorderPayload } from './components/TaskBoard'
+import { useTaskFilters } from './hooks/useTaskFilters'
 import { useSettings } from './hooks/useSettings'
 import type { ActiveView, Board, Task } from './types/board'
 import type { TaskPriority } from './types/priority'
@@ -31,6 +32,13 @@ export default function App() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { settings, updateSetting } = useSettings()
+  const {
+    searchQuery,
+    setSearchQuery,
+    priorityFilter,
+    setPriorityFilter,
+    clearFilters,
+  } = useTaskFilters()
 
   const loadBoard = useCallback(async () => {
     setError(null)
@@ -363,6 +371,11 @@ export default function App() {
           onAddComment={handleAddComment}
           onDeleteTask={handleDeleteTask}
           onSelectGroup={setActiveView}
+          searchQuery={searchQuery}
+          priorityFilter={priorityFilter}
+          onSearchChange={setSearchQuery}
+          onPriorityChange={setPriorityFilter}
+          onClearFilters={clearFilters}
         />
       )}
     </div>

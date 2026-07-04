@@ -75,6 +75,9 @@ export default function Sidebar({
     }
   }
 
+  const navItemClass =
+    'outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-100 focus-visible:ring-offset-1'
+
   return (
     <aside className="sticky top-0 flex h-screen w-[260px] shrink-0 flex-col border-r border-surface-border bg-white px-5 py-6">
       <div className="mb-8 flex items-center justify-between">
@@ -88,30 +91,10 @@ export default function Sidebar({
         </button>
       </div>
 
-      <div className="relative mb-6">
-        <svg
-          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-surface-muted"
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-        >
-          <circle cx="11" cy="11" r="8" />
-          <path d="m21 21-4.3-4.3" />
-        </svg>
-        <input
-          type="search"
-          placeholder="Search"
-          className="w-full rounded-xl border border-surface-border bg-[#FAFAFB] py-2.5 pl-10 pr-3 text-sm text-surface-text outline-none placeholder:text-surface-muted focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-        />
-      </div>
-
       <button
         type="button"
         onClick={() => onSelectView('all')}
-        className={`mb-6 flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+        className={`mb-6 flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition ${navItemClass} ${
           activeView === 'all'
             ? 'bg-brand-50 text-brand-600'
             : 'text-surface-text hover:bg-[#FAFAFB]'
@@ -200,7 +183,7 @@ export default function Sidebar({
                     event.preventDefault()
                     setMenu({ group, x: event.clientX, y: event.clientY })
                   }}
-                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition ${
+                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition ${navItemClass} ${
                     activeView === group.id
                       ? 'bg-[#FAFAFB] font-medium text-surface-text'
                       : 'text-[#55556A] hover:bg-[#FAFAFB]'
@@ -243,7 +226,7 @@ export default function Sidebar({
         <button
           type="button"
           onClick={() => onSelectView('recycle')}
-          className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+          className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition ${navItemClass} ${
             activeView === 'recycle'
               ? 'bg-[#FAFAFB] font-medium text-surface-text'
               : 'text-[#55556A] hover:bg-[#FAFAFB]'
@@ -263,7 +246,7 @@ export default function Sidebar({
         <button
           type="button"
           onClick={() => onSelectView('settings')}
-          className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+          className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition ${navItemClass} ${
             activeView === 'settings'
               ? 'bg-[#FAFAFB] font-medium text-surface-text'
               : 'text-[#55556A] hover:bg-[#FAFAFB]'

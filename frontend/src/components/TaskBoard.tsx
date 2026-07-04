@@ -18,6 +18,9 @@ import AddCardButton from './AddCardButton'
 import GroupHeader from './GroupHeader'
 import { ProjectCarouselFrame } from './ProjectCarousel'
 import TaskRow from './TaskRow'
+import TaskSearchBar from './TaskSearchBar'
+import type { PriorityFilterValue } from '../hooks/useTaskFilters'
+import { isFilterActive, taskMatchesFilters } from '../utils/taskFilters'
 
 interface TaskBoardProps {
   groups: TaskGroup[]
@@ -33,11 +36,22 @@ interface TaskBoardProps {
   onAddComment: (task: Task, text: string) => Promise<void>
   onDeleteTask: (task: Task) => Promise<void>
   onSelectGroup: (groupId: number) => void
+  searchQuery: string
+  priorityFilter: PriorityFilterValue
+  onSearchChange: (value: string) => void
+  onPriorityChange: (value: PriorityFilterValue) => void
+  onClearFilters: () => void
 }
 
-function groupTasks(tasks: Task[], groupId: number | null) {
+function groupTasks(
+  tasks: Task[],
+  groupId: number | null,
+  searchQuery: string,
+  priorityFilter: PriorityFilterValue,
+) {
   return tasks
     .filter((task) => task.groupId === groupId)
+    .filter((task) => taskMatchesFilters(task, searchQuery, priorityFilter))
     .sort((a, b) => a.sortOrder - b.sortOrder)
 }
 
@@ -88,6 +102,11 @@ export default function TaskBoard({
   onAddComment,
   onDeleteTask,
   onSelectGroup,
+  searchQuery,
+  priorityFilter,
+  onSearchChange,
+  onPriorityChange,
+  onClearFilters,
 }: TaskBoardProps) {
   const [localTasks, setLocalTasks] = useState(tasks)
   const [activeTask, setActiveTask] = useState<Task | null>(null)
@@ -118,9 +137,46 @@ export default function TaskBoard({
     setExpandedTaskId(null)
   }, [activeGroupId])
 
+  useEffect(() => {
+    if (expandedTaskId == null) {
+      return
+    }
+    const task = localTasks.find((item) => item.id === expandedTaskId)
+    if (task && !taskMatchesFilters(task, searchQuery, priorityFilter)) {
+      setExpandedTaskId(null)
+    }
+  }, [expandedTaskId, localTasks, priorityFilter, searchQuery])
+
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
   const visibleGroups = activeGroupId === 'all' ? groups : groups.filter((group) => group.id === activeGroupId)
+
+  const filtersActive = isFilterActive(searchQuery, priorityFilter)
+
+  const scopedTasks = useMemo(() => {
+    if (activeGroupId === 'all') {
+      return localTasks
+    }
+    return localTasks.filter((task) => task.groupId === activeGroupId)
+  }, [localTasks, activeGroupId])
+
+  const totalScopedCount = scopedTasks.length
+
+  const visibleScopedCount = useMemo(() => {
+    if (!filtersActive) {
+      return totalScopedCount
+    }
+    return scopedTasks.filter((task) => taskMatchesFilters(task, searchQuery, priorityFilter)).length
+  }, [scopedTasks, searchQuery, priorityFilter, filtersActive, totalScopedCount])
+
+  const displayGroups = useMemo(() => {
+    if (!filtersActive || activeGroupId !== 'all') {
+      return visibleGroups
+    }
+    return visibleGroups.filter(
+      (group) => groupTasks(localTasks, group.id, searchQuery, priorityFilter).length > 0,
+    )
+  }, [visibleGroups, localTasks, searchQuery, priorityFilter, filtersActive, activeGroupId])
 
   const activeGroupIndex =
     typeof activeGroupId === 'number' ? groups.findIndex((group) => group.id === activeGroupId) : -1
@@ -132,7 +188,8 @@ export default function TaskBoard({
   const isCarouselView = activeGroupId !== 'all' && activeGroupIndex >= 0
 
   function renderGroupSection(group: TaskGroup, index: number) {
-    const groupTasksList = groupTasks(localTasks, group.id)
+    const groupTasksList = groupTasks(localTasks, group.id, searchQuery, priorityFilter)
+    const groupHasTasks = groupTasks(localTasks, group.id, '', 'ALL').length > 0
     return (
       <section
         key={group.id}
@@ -147,7 +204,9 @@ export default function TaskBoard({
           <GroupDropZone groupId={group.id}>
             {groupTasksList.length === 0 ? (
               <p className="rounded-2xl border border-dashed border-surface-border px-4 py-6 text-center text-sm text-surface-muted">
-                Drop tasks here
+                {filtersActive && groupHasTasks
+                  ? 'No tasks match your search or filter'
+                  : 'Drop tasks here'}
               </p>
             ) : (
               groupTasksList.map((task) => (
@@ -243,7 +302,7 @@ export default function TaskBoard({
     let nextTasks = [...localTasks]
 
     if (overId && activeId !== overId && overContainer === activeContainer) {
-      const groupItems = groupTasks(nextTasks, activeContainer)
+      const groupItems = groupTasks(nextTasks, activeContainer, '', 'ALL')
       const oldIndex = groupItems.findIndex((task) => task.id === activeId)
       const newIndex = groupItems.findIndex((task) => task.id === overId)
       if (oldIndex !== -1 && newIndex !== -1) {
@@ -304,8 +363,40 @@ export default function TaskBoard({
     void onDeleteTask(task)
   }
 
+  function renderBoardContent() {
+    if (filtersActive && visibleScopedCount === 0) {
+      return (
+        <div className="rounded-2xl border border-dashed border-surface-border bg-white px-6 py-12 text-center shadow-card">
+          <p className="text-sm text-surface-text">No tasks match your search or filter.</p>
+          <button
+            type="button"
+            onClick={onClearFilters}
+            className="mt-3 text-sm font-medium text-brand-600 transition hover:text-brand-700"
+          >
+            Clear search & filter
+          </button>
+        </div>
+      )
+    }
+
+    return displayGroups.map((group, index) => renderGroupSection(group, index))
+  }
+
   return (
-    <main className="flex-1 overflow-y-auto px-8 py-8">
+    <main className="flex-1 overflow-y-auto px-8 py-8 sm:px-24">
+      <div className="mx-auto mb-6 w-full max-w-xl">
+        <TaskSearchBar
+          searchQuery={searchQuery}
+          priorityFilter={priorityFilter}
+          onSearchChange={onSearchChange}
+          onPriorityChange={onPriorityChange}
+          onClear={onClearFilters}
+          isActive={filtersActive}
+          visibleCount={visibleScopedCount}
+          totalCount={totalScopedCount}
+        />
+      </div>
+
       <DndContext
         sensors={sensors}
         collisionDetection={closestCorners}
@@ -316,33 +407,35 @@ export default function TaskBoard({
         {isCarouselView ? (
           <>
             <ProjectCarouselFrame
+              activeGroupId={activeGroupId}
+              activeGroupIndex={activeGroupIndex}
               prevGroup={carouselPrevGroup}
               nextGroup={carouselNextGroup}
               onSelectGroup={onSelectGroup}
             >
-              {visibleGroups.map((group, index) => renderGroupSection(group, index))}
+              {renderBoardContent()}
             </ProjectCarouselFrame>
 
             {(carouselNextGroup || carouselPrevGroup) && (
               <div className="mx-auto mt-4 flex max-w-xl justify-between gap-3 sm:hidden">
-                {carouselNextGroup ? (
-                  <button
-                    type="button"
-                    onClick={() => onSelectGroup(carouselNextGroup.id)}
-                    className="truncate rounded-lg px-2 py-1 text-left text-xs text-surface-muted opacity-60 transition hover:opacity-100"
-                  >
-                    ← {carouselNextGroup.name}
-                  </button>
-                ) : (
-                  <span />
-                )}
                 {carouselPrevGroup ? (
                   <button
                     type="button"
                     onClick={() => onSelectGroup(carouselPrevGroup.id)}
+                    className="truncate rounded-lg px-2 py-1 text-left text-xs text-surface-muted opacity-60 transition hover:opacity-100"
+                  >
+                    ← {carouselPrevGroup.name}
+                  </button>
+                ) : (
+                  <span />
+                )}
+                {carouselNextGroup ? (
+                  <button
+                    type="button"
+                    onClick={() => onSelectGroup(carouselNextGroup.id)}
                     className="truncate rounded-lg px-2 py-1 text-right text-xs text-surface-muted opacity-60 transition hover:opacity-100"
                   >
-                    {carouselPrevGroup.name} →
+                    {carouselNextGroup.name} →
                   </button>
                 ) : (
                   <span />
@@ -351,9 +444,7 @@ export default function TaskBoard({
             )}
           </>
         ) : (
-          <div className="mx-auto max-w-xl">
-            {visibleGroups.map((group, index) => renderGroupSection(group, index))}
-          </div>
+          <div className="mx-auto max-w-xl">{renderBoardContent()}</div>
         )}
 
         <DragOverlay>
