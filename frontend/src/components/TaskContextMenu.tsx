@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 interface TaskContextMenuProps {
   x: number
@@ -10,6 +11,27 @@ interface TaskContextMenuProps {
 
 export default function TaskContextMenu({ x, y, onRename, onDelete, onClose }: TaskContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
+  const [position, setPosition] = useState({ left: x, top: y })
+
+  useLayoutEffect(() => {
+    const menu = menuRef.current
+    if (!menu) {
+      return
+    }
+
+    const rect = menu.getBoundingClientRect()
+    let left = x
+    let top = y
+
+    if (left + rect.width > window.innerWidth - 8) {
+      left = Math.max(8, window.innerWidth - rect.width - 8)
+    }
+    if (top + rect.height > window.innerHeight - 8) {
+      top = Math.max(8, window.innerHeight - rect.height - 8)
+    }
+
+    setPosition({ left, top })
+  }, [x, y])
 
   useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
@@ -30,11 +52,11 @@ export default function TaskContextMenu({ x, y, onRename, onDelete, onClose }: T
     }
   }, [onClose])
 
-  return (
+  return createPortal(
     <div
       ref={menuRef}
-      className="fixed z-50 min-w-[140px] overflow-hidden rounded-xl border border-surface-border bg-white py-1 shadow-lg"
-      style={{ left: x, top: y }}
+      className="fixed z-[9999] min-w-[140px] overflow-hidden rounded-xl border border-surface-border bg-white py-1 shadow-lg"
+      style={{ left: position.left, top: position.top }}
     >
       <button
         type="button"
@@ -62,6 +84,7 @@ export default function TaskContextMenu({ x, y, onRename, onDelete, onClose }: T
         </svg>
         Delete
       </button>
-    </div>
+    </div>,
+    document.body,
   )
 }

@@ -2,39 +2,54 @@ import {
   DndContext,
   DragOverlay,
   PointerSensor,
+  TouchSensor,
   closestCorners,
   useDroppable,
   useSensor,
   useSensors,
+  defaultDropAnimation,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
 } from '@dnd-kit/core'
-import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { SortableContext, arrayMove, horizontalListSortingStrategy, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { flushSync } from 'react-dom'
 import type { Task, TaskGroup } from '../types/board'
 import type { TaskPriority } from '../types/priority'
+import type { PriorityFilterValue } from '../hooks/useTaskFilters'
+import type { BoardView } from '../types/settings'
+import BoardViewToggle from './BoardViewToggle'
 import GroupHeader from './GroupHeader'
+import ProjectGroupDragPreview from './ProjectGroupDragPreview'
 import { ProjectCarouselFrame } from './ProjectCarousel'
+import SortableGroupSection, { type GroupDragHandleProps } from './SortableGroupSection'
+import TaskDragPreview from './TaskDragPreview'
 import TaskInsertSlot from './TaskInsertSlot'
 import TaskRow from './TaskRow'
 import TaskSearchBar from './TaskSearchBar'
-import type { PriorityFilterValue } from '../hooks/useTaskFilters'
 import { isFilterActive, taskMatchesFilters } from '../utils/taskFilters'
 import { summarizeGroupTasks } from '../utils/groupStats'
+import { AUTO_EDIT_FOCUS_KEEPALIVE_MS } from '../constants/tasks'
+import { scheduleFocusNewTaskTitleInput } from '../utils/focusNewTaskTitle'
 
 interface TaskBoardProps {
   groups: TaskGroup[]
   tasks: Task[]
   activeGroupId: number | 'all'
   doubleClickRename: boolean
+  showProjectTaskBreakdown: boolean
+  showProjectProgressBar: boolean
   onToggleDone: (task: Task) => void
   onSetPriority: (task: Task, priority: TaskPriority) => void
   onReorder: (tasks: Task[]) => Promise<void>
+  onReorderGroups: (groups: TaskGroup[]) => Promise<void>
   onRenameGroup: (groupId: number, name: string) => Promise<void>
   onRenameTask: (task: Task, title: string) => Promise<void>
   onCreateTask: (groupId: number, insertAtIndex?: number) => Promise<Task | null>
   onAddComment: (task: Task, text: string) => Promise<void>
+  onUpdateComment: (task: Task, commentId: number, text: string) => Promise<void>
+  onDeleteComment: (task: Task, commentId: number) => Promise<void>
   onDeleteTask: (task: Task) => Promise<void>
   onSelectGroup: (groupId: number) => void
   searchQuery: string
@@ -42,6 +57,13 @@ interface TaskBoardProps {
   onSearchChange: (value: string) => void
   onPriorityChange: (value: PriorityFilterValue) => void
   onClearFilters: () => void
+  boardView: BoardView
+  wrapTaskTitles: boolean
+  boardZoom?: number
+  autoEditTaskId?: number | null
+  onAutoEditConsumed?: () => void
+  onBoardViewChange: (view: BoardView) => void
+  onWrapTaskTitlesChange: (wrap: boolean) => void
 }
 
 function groupTasks(
@@ -75,6 +97,20 @@ function buildReorderPayload(tasks: Task[]): { taskId: number; groupId: number |
       })
   })
   return items
+}
+
+function resolveGroupIdFromDndId(overId: string, tasks: Task[]): number | null {
+  if (overId.startsWith('column-')) {
+    return Number(overId.replace('column-', ''))
+  }
+  if (overId.startsWith('group-')) {
+    return Number(overId.replace('group-', ''))
+  }
+  if (overId.startsWith('task-')) {
+    const taskId = Number(overId.replace('task-', ''))
+    return tasks.find((task) => task.id === taskId)?.groupId ?? null
+  }
+  return null
 }
 
 function normalizeSortOrders(tasks: Task[]): Task[] {
@@ -130,13 +166,18 @@ export default function TaskBoard({
   tasks,
   activeGroupId,
   doubleClickRename,
+  showProjectTaskBreakdown,
+  showProjectProgressBar,
   onToggleDone,
   onSetPriority,
   onReorder,
+  onReorderGroups,
   onRenameGroup,
   onRenameTask,
   onCreateTask,
   onAddComment,
+  onUpdateComment,
+  onDeleteComment,
   onDeleteTask,
   onSelectGroup,
   searchQuery,
@@ -144,14 +185,24 @@ export default function TaskBoard({
   onSearchChange,
   onPriorityChange,
   onClearFilters,
+  boardView,
+  wrapTaskTitles,
+  boardZoom = 1,
+  autoEditTaskId = null,
+  onAutoEditConsumed,
+  onBoardViewChange,
+  onWrapTaskTitlesChange,
 }: TaskBoardProps) {
   const [localTasks, setLocalTasks] = useState(tasks)
+  const [localGroups, setLocalGroups] = useState(groups)
+  const localGroupsRef = useRef(localGroups)
   const [activeTask, setActiveTask] = useState<Task | null>(null)
+  const [activeGroup, setActiveGroup] = useState<TaskGroup | null>(null)
   const [expandedTaskId, setExpandedTaskId] = useState<number | null>(null)
-  const [autoEditTaskId, setAutoEditTaskId] = useState<number | null>(null)
   const [seamHover, setSeamHover] = useState<{
     insertIndex: number
     edge: 'top' | 'bottom'
+    zone: 'left' | 'right'
   } | null>(null)
 
   const tasksSignature = useMemo(
@@ -159,11 +210,27 @@ export default function TaskBoard({
       tasks
         .map(
           (task) =>
-            `${task.id}:${task.title}:${task.done}:${task.groupId}:${task.sortOrder}:${task.priority ?? 'NONE'}:${task.comments?.length ?? 0}`,
+            `${task.id}:${task.title}:${task.done}:${task.groupId}:${task.sortOrder}:${task.priority ?? 'NONE'}:${task.comments?.map((comment) => `${comment.id}:${comment.text}`).join(';') ?? ''}`,
         )
         .join('|'),
     [tasks],
   )
+
+  const groupsSignature = useMemo(
+    () =>
+      groups
+        .map((group) => `${group.id}:${group.name}:${group.sortOrder}:${group.color}:${group.taskCount}`)
+        .join('|'),
+    [groups],
+  )
+
+  useEffect(() => {
+    setLocalGroups(groups)
+  }, [groupsSignature, groups])
+
+  useEffect(() => {
+    localGroupsRef.current = localGroups
+  }, [localGroups])
 
   useEffect(() => {
     setLocalTasks(tasks)
@@ -183,9 +250,31 @@ export default function TaskBoard({
     if (autoEditTaskId == null) {
       return
     }
-    requestAnimationFrame(() => {
-      document.querySelector(`[data-task-id="${autoEditTaskId}"]`)?.scrollIntoView({ block: 'nearest' })
-    })
+    const taskId = autoEditTaskId
+    const getTitleInput = () => {
+      const row = document.querySelector(`[data-task-id="${taskId}"]`)
+      const input = row?.querySelector('[data-testid="task-title-input"]')
+      return input instanceof HTMLInputElement ? input : null
+    }
+
+    const timers = AUTO_EDIT_FOCUS_KEEPALIVE_MS.map((delayMs) =>
+      window.setTimeout(() => {
+        const input = getTitleInput()
+        if (!input) {
+          return
+        }
+        if (delayMs === 0) {
+          input.closest('[data-task-id]')?.scrollIntoView({ block: 'nearest' })
+        }
+        if (document.activeElement !== input) {
+          scheduleFocusNewTaskTitleInput(getTitleInput)
+        }
+      }, delayMs),
+    )
+
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer))
+    }
   }, [autoEditTaskId])
 
   useEffect(() => {
@@ -198,9 +287,17 @@ export default function TaskBoard({
     }
   }, [expandedTaskId, localTasks, priorityFilter, searchQuery])
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { delay: 180, tolerance: 6 },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 180, tolerance: 6 },
+    }),
+  )
 
-  const visibleGroups = activeGroupId === 'all' ? groups : groups.filter((group) => group.id === activeGroupId)
+  const visibleGroups =
+    activeGroupId === 'all' ? localGroups : localGroups.filter((group) => group.id === activeGroupId)
 
   const filtersActive = isFilterActive(searchQuery, priorityFilter)
 
@@ -230,27 +327,235 @@ export default function TaskBoard({
   }, [visibleGroups, localTasks, searchQuery, priorityFilter, filtersActive, activeGroupId])
 
   const activeGroupIndex =
-    typeof activeGroupId === 'number' ? groups.findIndex((group) => group.id === activeGroupId) : -1
+    typeof activeGroupId === 'number' ? localGroups.findIndex((group) => group.id === activeGroupId) : -1
 
-  const carouselPrevGroup = activeGroupIndex > 0 ? groups[activeGroupIndex - 1] : null
+  const carouselPrevGroup = activeGroupIndex > 0 ? localGroups[activeGroupIndex - 1] : null
   const carouselNextGroup =
-    activeGroupIndex >= 0 && activeGroupIndex < groups.length - 1 ? groups[activeGroupIndex + 1] : null
+    activeGroupIndex >= 0 && activeGroupIndex < localGroups.length - 1
+      ? localGroups[activeGroupIndex + 1]
+      : null
 
   const isCarouselView = activeGroupId !== 'all' && activeGroupIndex >= 0
+  const isColumnView = boardView === 'columns' && activeGroupId === 'all' && !isCarouselView
+  const isListView = !isColumnView
+  const canReorderProjects = activeGroupId === 'all' && !filtersActive && !isCarouselView
+  const listDragOverlayZoom = isListView && boardZoom !== 1 ? 1 / boardZoom : undefined
 
-  function handleCreateTask(groupId: number, insertAtIndex?: number) {
-    void (async () => {
-      setSeamHover(null)
-      const created = await onCreateTask(groupId, insertAtIndex)
-      if (created) {
-        setExpandedTaskId(null)
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            setAutoEditTaskId(created.id)
-          })
-        })
+  const skipBoardViewAnimation = useRef(true)
+  const [viewEnterFrom, setViewEnterFrom] = useState<BoardView | null>(null)
+
+  useEffect(() => {
+    if (skipBoardViewAnimation.current) {
+      skipBoardViewAnimation.current = false
+      return
+    }
+    if (isCarouselView) {
+      return
+    }
+    setViewEnterFrom(boardView)
+    const timer = window.setTimeout(() => setViewEnterFrom(null), 360)
+    return () => window.clearTimeout(timer)
+  }, [boardView, isCarouselView])
+
+  const boardViewEnterClass =
+    viewEnterFrom === 'columns'
+      ? 'board-view-enter-columns'
+      : viewEnterFrom === 'list'
+        ? 'board-view-enter-list'
+        : ''
+
+  function renderTaskList(group: TaskGroup, groupTasksList: Task[], groupHasTasks: boolean, columnLayout: boolean) {
+    if (groupTasksList.length === 0) {
+      if (filtersActive && groupHasTasks) {
+        return (
+          <p className="rounded-2xl border border-dashed border-surface-border px-4 py-6 text-center text-sm text-surface-muted">
+            No tasks match your search or filter
+          </p>
+        )
       }
-    })()
+      return <AddTaskCard onClick={() => handleCreateTaskAt(group.id, 0)} />
+    }
+
+    if (columnLayout) {
+      return (
+        <div className="board-column-tasks flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain py-0.5">
+          {groupTasksList.map((task) => (
+            <div key={task.id} className="shrink-0">
+            <TaskRow
+              task={task}
+              wrapTaskTitles={wrapTaskTitles}
+              expanded={expandedTaskId === task.id}
+              doubleClickRename={doubleClickRename}
+              autoEditTitle={autoEditTaskId === task.id}
+              variant="standalone"
+              onAutoEditConsumed={onAutoEditConsumed}
+              onToggleExpand={handleToggleExpand}
+              onToggleDone={handleToggleDone}
+              onSetPriority={handleSetPriority}
+              onRenameTitle={handleRenameTask}
+              onAddComment={handleAddComment}
+              onUpdateComment={handleUpdateComment}
+              onDeleteComment={handleDeleteComment}
+              onDelete={handleDeleteTask}
+            />
+            </div>
+          ))}
+          {!activeTask && (
+            <AddTaskCard onClick={() => handleCreateTaskAt(group.id, groupTasksList.length)} />
+          )}
+        </div>
+      )
+    }
+
+    return (
+      <div
+        className={`relative -mx-14 overflow-visible px-14 ${wrapTaskTitles ? 'space-y-2' : ''}`}
+      >
+        {groupTasksList.map((task, taskIndex) => {
+          const useStandaloneListLayout = wrapTaskTitles
+          const stackPosition = useStandaloneListLayout
+            ? undefined
+            : groupTasksList.length === 1
+              ? 'only'
+              : taskIndex === 0
+                ? 'first'
+                : taskIndex === groupTasksList.length - 1
+                  ? 'last'
+                  : 'middle'
+
+          const openBefore =
+            !useStandaloneListLayout &&
+            seamHover != null &&
+            seamHover.insertIndex === taskIndex &&
+            seamHover.edge === 'top'
+          const openAfter =
+            !useStandaloneListLayout &&
+            seamHover != null &&
+            ((seamHover.insertIndex === taskIndex + 1 && seamHover.edge === 'top') ||
+              (seamHover.edge === 'bottom' &&
+                seamHover.insertIndex === groupTasksList.length &&
+                taskIndex === groupTasksList.length - 1))
+          const seamCurveAbove = openBefore
+          const seamCurveBelow = openAfter
+          const seamZone = openBefore || openAfter ? (seamHover?.zone ?? null) : null
+
+          return (
+            <div
+              key={task.id}
+              className={`relative ${useStandaloneListLayout || taskIndex === 0 ? '' : '-mt-px'}`}
+            >
+              {!activeTask && (
+                <TaskInsertSlot
+                  onInsert={() => handleCreateTaskAt(group.id, taskIndex)}
+                  onHoverChange={(active, zone) => {
+                    setSeamHover(active && zone ? { insertIndex: taskIndex, edge: 'top', zone } : null)
+                  }}
+                />
+              )}
+              <TaskRow
+                task={task}
+                wrapTaskTitles={wrapTaskTitles}
+                dragWithOverlay={!columnLayout}
+                expanded={expandedTaskId === task.id}
+                doubleClickRename={doubleClickRename}
+                autoEditTitle={autoEditTaskId === task.id}
+                variant={useStandaloneListLayout ? 'standalone' : 'stacked'}
+                stackPosition={stackPosition}
+                seamGapAbove={seamCurveAbove}
+                seamGapBelow={seamCurveBelow}
+                seamZone={seamZone}
+                onAutoEditConsumed={onAutoEditConsumed}
+                onToggleExpand={handleToggleExpand}
+                onToggleDone={handleToggleDone}
+                onSetPriority={handleSetPriority}
+                onRenameTitle={handleRenameTask}
+                onAddComment={handleAddComment}
+                onUpdateComment={handleUpdateComment}
+                onDeleteComment={handleDeleteComment}
+                onDelete={handleDeleteTask}
+              />
+              {!activeTask && taskIndex === groupTasksList.length - 1 && (
+                <TaskInsertSlot
+                  position="bottom"
+                  onInsert={() => handleCreateTaskAt(group.id, groupTasksList.length)}
+                  onHoverChange={(active, zone) => {
+                    setSeamHover(
+                      active && zone
+                        ? { insertIndex: groupTasksList.length, edge: 'bottom', zone }
+                        : null,
+                    )
+                  }}
+                />
+              )}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  function renderGroupSectionInner(
+    group: TaskGroup,
+    columnLayout: boolean,
+    dragHandle?: GroupDragHandleProps,
+  ) {
+    const groupTasksList = groupTasks(localTasks, group.id, searchQuery, priorityFilter)
+    const groupHasTasks = groupTasks(localTasks, group.id, '', 'ALL').length > 0
+    const groupSummary = summarizeGroupTasks(localTasks, group.id, searchQuery, priorityFilter)
+
+    return (
+      <>
+        <div className="shrink-0">
+          <GroupHeader
+            group={group}
+            summary={groupSummary}
+            filtersActive={filtersActive}
+            showTaskBreakdown={showProjectTaskBreakdown}
+            showProgressBar={showProjectProgressBar}
+            onRename={onRenameGroup}
+            dragHandle={dragHandle}
+          />
+        </div>
+        <SortableContext
+          id={`group-${group.id}`}
+          items={groupTasksList.map((task) => `task-${task.id}`)}
+          strategy={verticalListSortingStrategy}
+        >
+          <div className={columnLayout ? 'flex min-h-0 flex-1 flex-col' : undefined}>
+            <GroupDropZone groupId={group.id} columnLayout={columnLayout}>
+              {renderTaskList(group, groupTasksList, groupHasTasks, columnLayout)}
+            </GroupDropZone>
+          </div>
+        </SortableContext>
+      </>
+    )
+  }
+
+  function renderGroupSection(group: TaskGroup, index: number, columnLayout = false) {
+    const sectionClass = columnLayout
+      ? 'board-column-card flex h-full min-h-0 w-[min(320px,88vw)] shrink-0 flex-col self-stretch rounded-2xl border border-surface-border bg-[#FAFAFB] p-3 shadow-sm'
+      : index > 0 && !isCarouselView
+        ? 'board-list-section mt-5 border-t border-[#EBEBF0] pt-5'
+        : 'board-list-section'
+
+    if (!canReorderProjects) {
+      return (
+        <section key={group.id} className={sectionClass}>
+          {renderGroupSectionInner(group, columnLayout)}
+        </section>
+      )
+    }
+
+    return (
+      <SortableGroupSection
+        key={group.id}
+        group={group}
+        className={sectionClass}
+        dragWithOverlay
+      >
+        {({ dragHandle }) => renderGroupSectionInner(group, columnLayout, dragHandle)}
+      </SortableGroupSection>
+    )
   }
 
   function handleCreateTaskAt(groupId: number, visibleInsertIndex: number) {
@@ -264,113 +569,24 @@ export default function TaskBoard({
     handleCreateTask(groupId, insertAtIndex)
   }
 
-  function renderGroupSection(group: TaskGroup, index: number) {
-    const groupTasksList = groupTasks(localTasks, group.id, searchQuery, priorityFilter)
-    const groupHasTasks = groupTasks(localTasks, group.id, '', 'ALL').length > 0
-    const groupSummary = summarizeGroupTasks(localTasks, group.id, searchQuery, priorityFilter)
-    return (
-      <section
-        key={group.id}
-        className={index > 0 && !isCarouselView ? 'mt-5 border-t border-[#EBEBF0] pt-5' : ''}
-      >
-        <GroupHeader
-          group={group}
-          summary={groupSummary}
-          filtersActive={filtersActive}
-          onRename={onRenameGroup}
-          onAddTask={handleCreateTask}
-        />
-        <SortableContext
-          id={`group-${group.id}`}
-          items={groupTasksList.map((task) => `task-${task.id}`)}
-          strategy={verticalListSortingStrategy}
-        >
-          <GroupDropZone groupId={group.id}>
-            {groupTasksList.length === 0 ? (
-              <p className="rounded-2xl border border-dashed border-surface-border px-4 py-6 text-center text-sm text-surface-muted">
-                {filtersActive && groupHasTasks
-                  ? 'No tasks match your search or filter'
-                  : 'Drop tasks here'}
-              </p>
-            ) : (
-              <div className="relative -mx-14 overflow-visible px-14">
-                {groupTasksList.map((task, taskIndex) => {
-                  const stackPosition =
-                    groupTasksList.length === 1
-                      ? 'only'
-                      : taskIndex === 0
-                        ? 'first'
-                        : taskIndex === groupTasksList.length - 1
-                          ? 'last'
-                          : 'middle'
-
-                  const openBefore =
-                    seamHover != null &&
-                    seamHover.insertIndex === taskIndex &&
-                    seamHover.edge === 'top'
-                  const openAfter =
-                    seamHover != null &&
-                    ((seamHover.insertIndex === taskIndex + 1 && seamHover.edge === 'top') ||
-                      (seamHover.edge === 'bottom' &&
-                        seamHover.insertIndex === groupTasksList.length &&
-                        taskIndex === groupTasksList.length - 1))
-                  const seamCurveAbove = openBefore
-                  const seamCurveBelow = openAfter
-
-                  return (
-                    <div
-                      key={task.id}
-                      className={`relative ${taskIndex > 0 ? '-mt-px' : ''}`}
-                    >
-                      {!activeTask && (
-                        <TaskInsertSlot
-                          onInsert={() => handleCreateTaskAt(group.id, taskIndex)}
-                          onHoverChange={(active, zone) => {
-                            setSeamHover(
-                              active && zone ? { insertIndex: taskIndex, edge: 'top' } : null,
-                            )
-                          }}
-                        />
-                      )}
-                      <TaskRow
-                        task={task}
-                        expanded={expandedTaskId === task.id}
-                        doubleClickRename={doubleClickRename}
-                        autoEditTitle={autoEditTaskId === task.id}
-                        stackPosition={stackPosition}
-                        seamGapAbove={seamCurveAbove}
-                        seamGapBelow={seamCurveBelow}
-                        onAutoEditConsumed={() => setAutoEditTaskId(null)}
-                        onToggleExpand={handleToggleExpand}
-                        onToggleDone={handleToggleDone}
-                        onSetPriority={handleSetPriority}
-                        onRenameTitle={handleRenameTask}
-                        onAddComment={handleAddComment}
-                        onDelete={handleDeleteTask}
-                      />
-                      {!activeTask && taskIndex === groupTasksList.length - 1 && (
-                        <TaskInsertSlot
-                          position="bottom"
-                          onInsert={() => handleCreateTaskAt(group.id, groupTasksList.length)}
-                          onHoverChange={(active, zone) => {
-                            setSeamHover(
-                              active && zone
-                                ? { insertIndex: groupTasksList.length, edge: 'bottom' }
-                                : null,
-                            )
-                          }}
-                        />
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-
-          </GroupDropZone>
-        </SortableContext>
-      </section>
-    )
+  function handleCreateTask(groupId: number, insertAtIndex?: number) {
+    void (async () => {
+      setSeamHover(null)
+      const created = await onCreateTask(groupId, insertAtIndex)
+      if (created) {
+        setExpandedTaskId(null)
+        flushSync(() => {
+          setLocalTasks((current) => {
+            if (current.some((task) => task.id === created.id)) {
+              return current
+            }
+            return insertAtIndex != null
+              ? insertTaskInGroup(current, created, groupId, insertAtIndex)
+              : [...current, created]
+          })
+        })
+      }
+    })()
   }
 
   function findContainer(taskId: number) {
@@ -379,14 +595,59 @@ export default function TaskBoard({
   }
 
   function handleDragStart(event: DragStartEvent) {
-    const taskId = Number(String(event.active.id).replace('task-', ''))
-    setActiveTask(localTasks.find((task) => task.id === taskId) ?? null)
+    const activeId = String(event.active.id)
     setSeamHover(null)
+    document.body.classList.add('is-dragging-task')
+
+    if (activeId.startsWith('column-')) {
+      const groupId = Number(activeId.replace('column-', ''))
+      setActiveGroup(localGroups.find((group) => group.id === groupId) ?? null)
+      setActiveTask(null)
+      return
+    }
+
+    if (activeId.startsWith('task-')) {
+      const taskId = Number(activeId.replace('task-', ''))
+      setActiveTask(localTasks.find((task) => task.id === taskId) ?? null)
+      setActiveGroup(null)
+    }
   }
 
   function handleDragOver(event: DragOverEvent) {
     const { active, over } = event
     if (!over) {
+      return
+    }
+
+    const activeIdStr = String(active.id)
+    const overIdStr = String(over.id)
+
+    if (activeIdStr.startsWith('column-')) {
+      if (!canReorderProjects) {
+        return
+      }
+
+      const activeColumnId = Number(activeIdStr.replace('column-', ''))
+      const overColumnId = resolveGroupIdFromDndId(overIdStr, localTasks)
+      if (overColumnId == null || activeColumnId === overColumnId) {
+        return
+      }
+
+      setLocalGroups((current) => {
+        const oldIndex = current.findIndex((group) => group.id === activeColumnId)
+        const newIndex = current.findIndex((group) => group.id === overColumnId)
+        if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) {
+          return current
+        }
+        return arrayMove(current, oldIndex, newIndex).map((group, index) => ({
+          ...group,
+          sortOrder: index,
+        }))
+      })
+      return
+    }
+
+    if (!activeIdStr.startsWith('task-')) {
       return
     }
 
@@ -417,9 +678,31 @@ export default function TaskBoard({
 
   async function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event
-    setActiveTask(null)
+    const activeIdStr = String(active.id)
+    document.body.classList.remove('is-dragging-task')
 
-    if (!over) {
+    if (activeIdStr.startsWith('column-')) {
+      if (isColumnView) {
+        setActiveGroup(null)
+      } else {
+        window.setTimeout(() => setActiveGroup(null), 240)
+      }
+
+      if (!over || !canReorderProjects) {
+        return
+      }
+
+      await onReorderGroups(localGroupsRef.current)
+      return
+    }
+
+    if (isColumnView) {
+      setActiveTask(null)
+    } else {
+      window.setTimeout(() => setActiveTask(null), 240)
+    }
+
+    if (!over || !activeIdStr.startsWith('task-')) {
       return
     }
 
@@ -492,6 +775,33 @@ export default function TaskBoard({
     return onAddComment(task, text)
   }
 
+  function handleUpdateComment(task: Task, commentId: number, text: string) {
+    setLocalTasks((current) =>
+      current.map((item) =>
+        item.id === task.id
+          ? {
+              ...item,
+              comments: (item.comments ?? []).map((comment) =>
+                comment.id === commentId ? { ...comment, text } : comment,
+              ),
+            }
+          : item,
+      ),
+    )
+    return onUpdateComment(task, commentId, text)
+  }
+
+  function handleDeleteComment(task: Task, commentId: number) {
+    setLocalTasks((current) =>
+      current.map((item) =>
+        item.id === task.id
+          ? { ...item, comments: (item.comments ?? []).filter((comment) => comment.id !== commentId) }
+          : item,
+      ),
+    )
+    return onDeleteComment(task, commentId)
+  }
+
   function handleDeleteTask(task: Task) {
     if (expandedTaskId === task.id) {
       setExpandedTaskId(null)
@@ -517,30 +827,89 @@ export default function TaskBoard({
       )
     }
 
-    return displayGroups.map((group, index) => renderGroupSection(group, index))
+    if (isColumnView) {
+      const columns = (
+        <div className="board-columns-scroll flex h-full min-h-0 flex-1 items-stretch gap-4 overflow-x-auto overflow-y-hidden px-1 pt-0">
+          {displayGroups.map((group, index) => renderGroupSection(group, index, true))}
+        </div>
+      )
+
+      if (!canReorderProjects) {
+        return columns
+      }
+
+      return (
+        <SortableContext
+          items={displayGroups.map((group) => `column-${group.id}`)}
+          strategy={horizontalListSortingStrategy}
+        >
+          {columns}
+        </SortableContext>
+      )
+    }
+
+    const listSections = displayGroups.map((group, index) => renderGroupSection(group, index))
+
+    if (!canReorderProjects) {
+      return listSections
+    }
+
+    return (
+      <SortableContext
+        items={displayGroups.map((group) => `column-${group.id}`)}
+        strategy={verticalListSortingStrategy}
+      >
+        {listSections}
+      </SortableContext>
+    )
   }
 
   return (
-    <main className="flex-1 overflow-y-auto px-8 py-8 sm:px-24">
-      <div className="mx-auto mb-6 w-full max-w-xl px-1">
-        <TaskSearchBar
-          searchQuery={searchQuery}
-          priorityFilter={priorityFilter}
-          onSearchChange={onSearchChange}
-          onPriorityChange={onPriorityChange}
-          onClear={onClearFilters}
-          isActive={filtersActive}
-          visibleCount={visibleScopedCount}
-          totalCount={totalScopedCount}
+    <main
+      className={`board-main-shell flex h-full min-h-0 flex-1 flex-col ${
+        isColumnView
+          ? 'overflow-hidden px-4 pb-3 pt-4 sm:px-5 sm:pt-4'
+          : 'overflow-y-auto px-8 pt-8 pb-20 sm:px-24 sm:pb-28'
+      }`}
+    >
+      <div
+        className={`board-toolbar-shell flex shrink-0 items-start gap-3 px-1 ${
+          isColumnView ? 'mb-3 w-full max-w-none' : 'mx-auto mb-6 w-full max-w-xl'
+        }`}
+      >
+        <div className="min-w-0 flex-1">
+          <TaskSearchBar
+            searchQuery={searchQuery}
+            priorityFilter={priorityFilter}
+            onSearchChange={onSearchChange}
+            onPriorityChange={onPriorityChange}
+            onClear={onClearFilters}
+            isActive={filtersActive}
+            visibleCount={visibleScopedCount}
+            totalCount={totalScopedCount}
+          />
+        </div>
+        <BoardViewToggle
+          boardView={boardView}
+          wrapTaskTitles={wrapTaskTitles}
+          columnsAvailable={activeGroupId === 'all'}
+          onBoardViewChange={onBoardViewChange}
+          onWrapTaskTitlesChange={onWrapTaskTitlesChange}
         />
       </div>
 
+      <div className="flex h-full min-h-0 flex-1 flex-col">
       <DndContext
         sensors={sensors}
         collisionDetection={closestCorners}
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
+        onDragCancel={() => {
+          setActiveTask(null)
+          setActiveGroup(null)
+          document.body.classList.remove('is-dragging-task')
+        }}
       >
         {isCarouselView ? (
           <>
@@ -555,30 +924,83 @@ export default function TaskBoard({
             </ProjectCarouselFrame>
           </>
         ) : (
-          <div className="mx-auto max-w-xl">{renderBoardContent()}</div>
+          <div
+            className={`board-content-shell ${isColumnView ? 'is-columns' : 'is-list'} ${boardViewEnterClass}`}
+          >
+            {renderBoardContent()}
+          </div>
         )}
 
-        <DragOverlay>
+        <DragOverlay
+          dropAnimation={
+            isColumnView || activeGroup != null
+              ? null
+              : { ...defaultDropAnimation, duration: 220 }
+          }
+          adjustScale={isColumnView}
+          style={listDragOverlayZoom ? { zoom: listDragOverlayZoom } : undefined}
+        >
           {activeTask ? (
-            <div className="flex items-center gap-3 rounded-2xl border border-brand-500 bg-white px-4 py-3 shadow-lg">
-              <span className="text-sm text-surface-text">{activeTask.title}</span>
-            </div>
+            <TaskDragPreview task={activeTask} wrapTaskTitles={wrapTaskTitles} />
+          ) : activeGroup ? (
+            <ProjectGroupDragPreview group={activeGroup} columnLayout={isColumnView} />
           ) : null}
         </DragOverlay>
       </DndContext>
+      </div>
     </main>
   )
 }
 
 export { buildReorderPayload, insertTaskInGroup }
 
-function GroupDropZone({ groupId, children }: { groupId: number; children: ReactNode }) {
+function AddTaskCard({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      data-testid="add-task-card"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onClick}
+      aria-label="Add new task"
+      className="flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-[#D5D5DE] bg-[#F5F5F7] px-4 py-3 text-sm text-surface-muted transition hover:border-[#C8C8D4] hover:bg-[#EEEEF2] hover:text-[#7A7A88] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-100"
+    >
+      <svg
+        className="h-4 w-4 shrink-0"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        aria-hidden="true"
+      >
+        <path d="M8 3v10M3 8h10" />
+      </svg>
+      <span className="truncate">Add new task</span>
+    </button>
+  )
+}
+
+function GroupDropZone({
+  groupId,
+  columnLayout = false,
+  children,
+}: {
+  groupId: number
+  columnLayout?: boolean
+  children: ReactNode
+}) {
   const { setNodeRef, isOver } = useDroppable({ id: `group-${groupId}` })
   return (
     <div
       ref={setNodeRef}
-      className={`min-h-[48px] rounded-2xl border border-dashed p-1 transition ${
-        isOver ? 'border-brand-500 bg-brand-50/40' : 'border-transparent hover:border-[#E8E8EF]'
+      className={`flex min-h-[48px] flex-col ${
+        columnLayout ? 'min-h-0 flex-1' : ''
+      } rounded-2xl border border-dashed p-1 transition ${
+        isOver
+          ? 'border-brand-500 bg-brand-50/40'
+          : columnLayout
+            ? 'border-transparent'
+            : 'border-transparent hover:border-[#E8E8EF]'
       }`}
     >
       {children}

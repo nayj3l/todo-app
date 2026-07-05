@@ -76,14 +76,16 @@ export default function ToastContainer({ toasts, onDismiss }: ToastContainerProp
   return (
     <div
       className="pointer-events-none fixed bottom-14 right-6 z-40 flex w-[min(20rem,calc(100vw-3rem))] flex-col items-end gap-2"
-      aria-live="polite"
-      aria-relevant="additions text"
+      aria-live="off"
+      aria-relevant="additions"
     >
       {toasts.map((toast) => (
         <div
           key={toast.id}
           className="toast-enter pointer-events-auto flex w-full items-center gap-2.5 rounded-xl border border-surface-border bg-white/95 px-3.5 py-2.5 shadow-card backdrop-blur-sm"
           role="status"
+          aria-live="polite"
+          aria-atomic="true"
         >
           <ToastIcon state={toast.state} />
           <p className={`min-w-0 flex-1 text-sm leading-snug ${messageClass(toast.state)}`}>

@@ -3,6 +3,7 @@ package com.todoapp.config;
 import com.todoapp.model.Task;
 import com.todoapp.model.TaskGroup;
 import com.todoapp.model.TaskPriority;
+import com.todoapp.model.User;
 import com.todoapp.repository.TaskGroupRepository;
 import com.todoapp.repository.TaskRepository;
 import org.springframework.stereotype.Component;
@@ -22,8 +23,8 @@ public class WeddingDataSeeder {
         this.taskRepository = taskRepository;
     }
 
-    public void seedIfEmpty() {
-        if (taskGroupRepository.count() > 0) {
+    public void seedForUser(User user) {
+        if (taskGroupRepository.countByUser_Id(user.getId()) > 0) {
             return;
         }
 
@@ -80,6 +81,7 @@ public class WeddingDataSeeder {
         int groupOrder = 0;
         for (Map.Entry<String, GroupSeed> entry : groups.entrySet()) {
             TaskGroup group = new TaskGroup();
+            group.setUser(user);
             group.setName(entry.getKey());
             group.setColor(entry.getValue().color());
             group.setSortOrder(groupOrder++);

@@ -1,22 +1,26 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TaskGroup } from '../types/board'
 import type { GroupTaskSummary } from '../utils/groupStats'
-import AddCardButton from './AddCardButton'
+import type { GroupDragHandleProps } from './SortableGroupSection'
 
 interface GroupHeaderProps {
   group: TaskGroup
   summary: GroupTaskSummary
   filtersActive: boolean
+  showTaskBreakdown: boolean
+  showProgressBar: boolean
   onRename: (groupId: number, name: string) => Promise<void>
-  onAddTask: (groupId: number) => void
+  dragHandle?: GroupDragHandleProps
 }
 
 export default function GroupHeader({
   group,
   summary,
   filtersActive,
+  showTaskBreakdown,
+  showProgressBar,
   onRename,
-  onAddTask,
+  dragHandle,
 }: GroupHeaderProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(group.name)
@@ -43,9 +47,16 @@ export default function GroupHeader({
     await onRename(group.id, next)
   }
 
+  const taskCountLabel =
+    filtersActive && summary.visible !== summary.total
+      ? `${summary.visible} / ${summary.total}`
+      : `${summary.total} task${summary.total === 1 ? '' : 's'}`
+
+  const showOptionalRow = summary.total > 0 && (showTaskBreakdown || showProgressBar)
+
   return (
-    <div className="mb-2 px-1">
-      <div className="group/header flex min-h-[28px] items-center gap-2 rounded-xl py-0.5 transition hover:bg-[#FAFAFB]">
+    <div className="mb-3">
+      <div className="group/header flex items-center gap-3 rounded-xl px-4 py-3 transition hover:bg-[#FAFAFB]">
         <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: group.color }} />
         {editing ? (
           <input
@@ -75,20 +86,38 @@ export default function GroupHeader({
             {group.name}
           </button>
         )}
-        <AddCardButton
-          onClick={() => onAddTask(group.id)}
-          className="shrink-0 opacity-0 transition group-hover/header:opacity-100"
-        />
+        {!editing && (
+          <span
+            className="shrink-0 rounded-full bg-[#F3F3F6] px-3 py-1 text-[11px] font-medium tabular-nums text-[#9A9AA8]"
+            title={taskCountLabel}
+          >
+            {taskCountLabel}
+          </span>
+        )}
+        {dragHandle && !editing && (
+          <button
+            type="button"
+            className="flex h-7 w-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-lg text-surface-muted transition hover:bg-[#F3F3F6] hover:text-surface-text active:cursor-grabbing"
+            aria-label={`Drag to reorder ${group.name}`}
+            {...dragHandle.attributes}
+            {...dragHandle.listeners}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <circle cx="9" cy="7" r="1.5" />
+              <circle cx="15" cy="7" r="1.5" />
+              <circle cx="9" cy="12" r="1.5" />
+              <circle cx="15" cy="12" r="1.5" />
+              <circle cx="9" cy="17" r="1.5" />
+              <circle cx="15" cy="17" r="1.5" />
+            </svg>
+          </button>
+        )}
       </div>
 
-      <div className="mt-1 flex items-center gap-2.5 pl-[18px] pr-1">
-        {summary.total === 0 ? (
-          <p className="text-[11px] text-surface-muted/80">No tasks yet</p>
-        ) : (
-          <>
+      {showOptionalRow && (
+        <div className="mt-2 flex items-center gap-2.5 px-4">
+          {showTaskBreakdown && (
             <p className="min-w-0 flex-1 text-[11px] leading-none text-surface-muted/80">
-              <span className="tabular-nums">{summary.total}</span> task{summary.total === 1 ? '' : 's'}
-              <span className="mx-1 text-[#E4E4EA]">·</span>
               <span className="tabular-nums">{summary.open}</span> open
               <span className="mx-1 text-[#E4E4EA]">·</span>
               <span className="tabular-nums">{summary.done}</span> done
@@ -99,8 +128,12 @@ export default function GroupHeader({
                 </>
               )}
             </p>
+          )}
+          {showProgressBar && (
             <div
-              className="h-0.5 w-14 shrink-0 overflow-hidden rounded-full bg-[#EBEBF0]/70"
+              className={`h-0.5 shrink-0 overflow-hidden rounded-full bg-[#EBEBF0]/70 ${
+                showTaskBreakdown ? 'w-14' : 'w-full max-w-[140px]'
+              }`}
               role="progressbar"
               aria-valuenow={summary.progress}
               aria-valuemin={0}
@@ -113,9 +146,12 @@ export default function GroupHeader({
                 style={{ width: `${summary.progress}%`, backgroundColor: group.color }}
               />
             </div>
-          </>
-        )}
-      </div>
+          )}
+          {showProgressBar && !showTaskBreakdown && (
+            <span className="shrink-0 text-[11px] tabular-nums text-surface-muted/70">{summary.progress}%</span>
+          )}
+        </div>
+      )}
     </div>
   )
 }

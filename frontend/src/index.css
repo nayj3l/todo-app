@@ -25,8 +25,54 @@ body {
     transition: grid-template-rows 300ms cubic-bezier(0.4, 0, 0.2, 1);
   }
 
+  .sidebar-projects-grid {
+    display: grid;
+    min-height: 0;
+    transition: grid-template-rows 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .sidebar-projects-scroll {
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: #d5d5de transparent;
+  }
+
+  .sidebar-projects-scroll::-webkit-scrollbar {
+    width: 5px;
+  }
+
+  .sidebar-projects-scroll::-webkit-scrollbar-track {
+    margin: 6px 0;
+    background: #f3f3f6;
+    border-radius: 9999px;
+  }
+
+  .sidebar-projects-scroll::-webkit-scrollbar-thumb {
+    background: #d5d5de;
+    border-radius: 9999px;
+  }
+
+  .sidebar-projects-scroll::-webkit-scrollbar-thumb:hover {
+    background: #b8b8c3;
+  }
+
+  .sidebar-label {
+    transition:
+      opacity 220ms cubic-bezier(0.4, 0, 0.2, 1),
+      max-width 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .sidebar-shell {
+    transition:
+      width 300ms cubic-bezier(0.4, 0, 0.2, 1),
+      padding 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
   @media (prefers-reduced-motion: reduce) {
-    .comment-panel-grid {
+    .comment-panel-grid,
+    .sidebar-projects-grid,
+    .sidebar-shell,
+    .sidebar-label {
       transition: none;
     }
 
@@ -133,6 +179,239 @@ body {
     to {
       transform: translateY(0);
       opacity: 1;
+    }
+  }
+
+  .modal-enter {
+    animation: modal-enter 180ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  }
+
+  @keyframes modal-enter {
+    from {
+      transform: translateY(8px) scale(0.98);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0) scale(1);
+      opacity: 1;
+    }
+  }
+
+  .board-columns-scroll {
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: #c8c8d4 transparent;
+    padding-bottom: 10px;
+  }
+
+  .board-columns-scroll::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  .board-columns-scroll::-webkit-scrollbar-track {
+    margin: 0 16px;
+    background: #ececf1;
+    border-radius: 9999px;
+  }
+
+  .board-columns-scroll::-webkit-scrollbar-thumb {
+    background: #c8c8d4;
+    border-radius: 9999px;
+  }
+
+  .board-columns-scroll::-webkit-scrollbar-thumb:hover {
+    background: #a8a8b8;
+  }
+
+  .board-column-tasks {
+    scrollbar-width: thin;
+    scrollbar-color: #d5d5de transparent;
+  }
+
+  .board-column-tasks::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .board-column-tasks::-webkit-scrollbar-thumb {
+    background: #d5d5de;
+    border-radius: 9999px;
+  }
+
+  .board-column-tasks::-webkit-scrollbar-thumb:hover {
+    background: #b8b8c3;
+  }
+
+  body.is-dragging-task,
+  body.is-dragging-task * {
+    cursor: grabbing !important;
+  }
+
+  .board-main-shell {
+    transition: padding 320ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .board-toolbar-shell {
+    transition:
+      max-width 320ms cubic-bezier(0.4, 0, 0.2, 1),
+      margin 320ms cubic-bezier(0.4, 0, 0.2, 1),
+      margin-bottom 320ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .board-content-shell {
+    width: 100%;
+    transition:
+      max-width 320ms cubic-bezier(0.4, 0, 0.2, 1),
+      opacity 220ms cubic-bezier(0.4, 0, 0.2, 1),
+      transform 320ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .board-content-shell.is-list {
+    max-width: 36rem;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .board-content-shell.is-columns {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    max-width: none;
+  }
+
+  .board-view-enter-columns {
+    animation: board-view-to-columns 340ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  }
+
+  .board-view-enter-list {
+    animation: board-view-to-list 340ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  }
+
+  .board-view-enter-columns .board-column-card {
+    animation: board-column-card-enter 360ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  }
+
+  .board-view-enter-columns .board-column-card:nth-child(1) {
+    animation-delay: 0ms;
+  }
+
+  .board-view-enter-columns .board-column-card:nth-child(2) {
+    animation-delay: 45ms;
+  }
+
+  .board-view-enter-columns .board-column-card:nth-child(3) {
+    animation-delay: 90ms;
+  }
+
+  .board-view-enter-columns .board-column-card:nth-child(4) {
+    animation-delay: 135ms;
+  }
+
+  .board-view-enter-columns .board-column-card:nth-child(n + 5) {
+    animation-delay: 170ms;
+  }
+
+  .board-view-enter-list .board-list-section {
+    animation: board-list-section-enter 340ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  }
+
+  .board-view-enter-list .board-list-section:nth-child(1) {
+    animation-delay: 0ms;
+  }
+
+  .board-view-enter-list .board-list-section:nth-child(2) {
+    animation-delay: 40ms;
+  }
+
+  .board-view-enter-list .board-list-section:nth-child(3) {
+    animation-delay: 80ms;
+  }
+
+  .board-view-enter-list .board-list-section:nth-child(n + 4) {
+    animation-delay: 110ms;
+  }
+
+  .pending-sync-enter {
+    animation: pending-sync-enter 240ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  }
+
+  @keyframes pending-sync-enter {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes board-view-to-columns {
+    from {
+      opacity: 0.55;
+      transform: translateY(12px) scale(0.992);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes board-view-to-list {
+    from {
+      opacity: 0.55;
+      transform: translateX(16px) scale(1.008);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateX(0) scale(1);
+    }
+  }
+
+  @keyframes board-column-card-enter {
+    from {
+      opacity: 0;
+      transform: translateY(14px) scale(0.98);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes board-list-section-enter {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .board-main-shell,
+    .board-toolbar-shell,
+    .board-content-shell {
+      transition: none;
+    }
+
+    .board-view-enter-columns,
+    .board-view-enter-list,
+    .board-view-enter-columns .board-column-card,
+    .board-view-enter-list .board-list-section {
+      animation: none;
+    }
+
+    .pending-sync-enter {
+      animation: none;
     }
   }
 }

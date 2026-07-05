@@ -16,7 +16,11 @@ spring:
 
 server:
   port: 9090
+  forward-headers-strategy: framework
 
 app:
+  frontend-url: ${FRONTEND_URL:http://localhost:5174}
   backup:
-    path: ../data/backup/tasks.json
+    base-path: ../data/backup/users
+  firebase:
+    credentials-path: ${FIREBASE_CREDENTIALS_PATH:firebase-service-account.json}

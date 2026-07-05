@@ -24,17 +24,19 @@ import java.util.List;
 public class JsonBackupService {
 
     private final ObjectMapper objectMapper;
-    private final Path backupPath;
+    private final Path backupBasePath;
 
-    public JsonBackupService(@Value("${app.backup.path}") String backupPath) {
-        this.backupPath = Paths.get(backupPath).toAbsolutePath().normalize();
+    public JsonBackupService(@Value("${app.backup.base-path}") String backupBasePath) {
+        this.backupBasePath = Paths.get(backupBasePath).toAbsolutePath().normalize();
         this.objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
                 .enable(SerializationFeature.INDENT_OUTPUT);
     }
 
-    public void saveBoard(List<TaskGroup> groups, List<Task> tasks, List<TaskComment> comments) throws IOException {
+    public void saveBoard(Long userId, List<TaskGroup> groups, List<Task> tasks, List<TaskComment> comments)
+            throws IOException {
+        Path backupPath = backupPathFor(userId);
         Files.createDirectories(backupPath.getParent());
         BoardBackup backup = new BoardBackup();
         backup.setGroups(groups.stream().map(GroupBackupRecord::from).toList());
@@ -50,10 +52,36 @@ public class JsonBackupService {
         }
     }
 
-    public BoardBackup loadBoard() {
-        if (!Files.exists(backupPath)) {
-            return new BoardBackup();
+    public BoardBackup loadBoard(Long userId) {
+        Path userPath = backupPathFor(userId);
+        if (Files.exists(userPath)) {
+            return readBackup(userPath);
         }
+        Path legacyPath = legacyBackupPath();
+        if (Files.exists(legacyPath)) {
+            return readBackup(legacyPath);
+        }
+        return new BoardBackup();
+    }
+
+    public boolean backupExists(Long userId) {
+        return Files.exists(backupPathFor(userId)) || Files.exists(legacyBackupPath());
+    }
+
+    public void migrateLegacyBackupForUser(Long userId) throws IOException {
+        Path userPath = backupPathFor(userId);
+        if (Files.exists(userPath)) {
+            return;
+        }
+        Path legacyPath = legacyBackupPath();
+        if (!Files.exists(legacyPath)) {
+            return;
+        }
+        Files.createDirectories(userPath.getParent());
+        Files.copy(legacyPath, userPath, StandardCopyOption.REPLACE_EXISTING);
+    }
+
+    private BoardBackup readBackup(Path backupPath) {
         try {
             return objectMapper.readValue(backupPath.toFile(), BoardBackup.class);
         } catch (IOException legacyError) {
@@ -61,7 +89,11 @@ public class JsonBackupService {
         }
     }
 
-    public boolean backupExists() {
-        return Files.exists(backupPath);
+    private Path legacyBackupPath() {
+        return backupBasePath.getParent().resolve("tasks.json");
+    }
+
+    private Path backupPathFor(Long userId) {
+        return backupBasePath.resolve(String.valueOf(userId)).resolve("tasks.json");
     }
 }

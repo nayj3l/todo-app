@@ -13,6 +13,7 @@ import com.todoapp.dto.TaskReorderItem;
 import com.todoapp.dto.TaskReorderRequest;
 import com.todoapp.dto.TaskRequest;
 import com.todoapp.dto.TaskResponse;
+import com.todoapp.exception.CommentNotFoundException;
 import com.todoapp.exception.GroupNotFoundException;
 import com.todoapp.exception.TaskNotFoundException;
 import com.todoapp.model.BoardBackup;
@@ -23,12 +24,10 @@ import com.todoapp.model.TaskBackupRecord;
 import com.todoapp.model.TaskComment;
 import com.todoapp.model.TaskGroup;
 import com.todoapp.model.TaskPriority;
+import com.todoapp.model.User;
 import com.todoapp.repository.TaskCommentRepository;
 import com.todoapp.repository.TaskGroupRepository;
 import com.todoapp.repository.TaskRepository;
-import jakarta.annotation.PostConstruct;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -62,34 +61,61 @@ public class BoardService {
         this.weddingDataSeeder = weddingDataSeeder;
     }
 
-    @PostConstruct
-    void initialize() {
-        recoverFromBackupIfNeeded();
-        weddingDataSeeder.seedIfEmpty();
-    }
-
-    @EventListener(ApplicationReadyEvent.class)
     @Transactional
-    public void syncBackupOnStartup() {
-        writeBackupSnapshot();
+    public void ensureUserBoard(User user) {
+        if (taskGroupRepository.countByUser_Id(user.getId()) > 0) {
+            return;
+        }
+        try {
+            jsonBackupService.migrateLegacyBackupForUser(user.getId());
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to migrate legacy backup", e);
+        }
+        if (recoverFromBackupIfNeeded(user)) {
+            return;
+        }
+        weddingDataSeeder.seedForUser(user);
     }
 
-    private void recoverFromBackupIfNeeded() {
-        if (taskGroupRepository.count() > 0 || taskRepository.count() > 0) {
-            return;
+    @Transactional
+    public BoardResponse restoreFromBackup(User user) {
+        clearUserBoard(user);
+        try {
+            jsonBackupService.migrateLegacyBackupForUser(user.getId());
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to migrate legacy backup", e);
         }
-        if (!jsonBackupService.backupExists()) {
-            return;
+        if (!recoverFromBackupIfNeeded(user)) {
+            weddingDataSeeder.seedForUser(user);
         }
-        BoardBackup backup = jsonBackupService.loadBoard();
+        return getBoard(user);
+    }
+
+    private void clearUserBoard(User user) {
+        List<Task> tasks = taskRepository.findAllByUserIdWithGroupOrderBySortOrderAscCreatedAtAsc(user.getId());
+        for (Task task : tasks) {
+            if (task.getId() != null) {
+                taskCommentRepository.deleteByTask_Id(task.getId());
+            }
+        }
+        taskRepository.deleteAll(tasks);
+        taskGroupRepository.deleteAll(taskGroupRepository.findByUser_IdOrderBySortOrderAsc(user.getId()));
+    }
+
+    private boolean recoverFromBackupIfNeeded(User user) {
+        if (!jsonBackupService.backupExists(user.getId())) {
+            return false;
+        }
+        BoardBackup backup = jsonBackupService.loadBoard(user.getId());
         if (backup.getGroups().isEmpty() && backup.getTasks().isEmpty()) {
-            return;
+            return false;
         }
         Map<Long, TaskGroup> groupMap = new HashMap<>();
         for (GroupBackupRecord record : backup.getGroups()) {
             Long oldId = record.getId();
             TaskGroup group = record.toGroup();
             group.setId(null);
+            group.setUser(user);
             TaskGroup saved = taskGroupRepository.save(group);
             groupMap.put(oldId, saved);
         }
@@ -107,12 +133,13 @@ public class BoardService {
                 }
             }
         }
+        return true;
     }
 
     @Transactional(readOnly = true)
-    public BoardResponse getBoard() {
-        List<TaskGroup> groups = taskGroupRepository.findAllByOrderBySortOrderAsc();
-        List<Task> tasks = taskRepository.findAllActiveWithGroupOrderBySortOrderAscCreatedAtAsc();
+    public BoardResponse getBoard(User user) {
+        List<TaskGroup> groups = taskGroupRepository.findByUser_IdOrderBySortOrderAsc(user.getId());
+        List<Task> tasks = taskRepository.findAllActiveByUserIdOrderBySortOrderAscCreatedAtAsc(user.getId());
         Map<Long, List<TaskComment>> commentsByTask = loadCommentsByTaskIds(
                 tasks.stream().map(Task::getId).toList());
 
@@ -128,8 +155,8 @@ public class BoardService {
     }
 
     @Transactional(readOnly = true)
-    public RecycleBinResponse getRecycleBin() {
-        List<Task> tasks = taskRepository.findAllDeletedWithGroupOrderByDeletedAtDesc();
+    public RecycleBinResponse getRecycleBin(User user) {
+        List<Task> tasks = taskRepository.findAllDeletedByUserIdOrderByDeletedAtDesc(user.getId());
         Map<Long, List<TaskComment>> commentsByTask = loadCommentsByTaskIds(
                 tasks.stream().map(Task::getId).toList());
 
@@ -141,34 +168,37 @@ public class BoardService {
     }
 
     @Transactional(readOnly = true)
-    public Task findById(Long id) {
-        return taskRepository.findById(id)
+    public Task findById(User user, Long id) {
+        return taskRepository.findByIdAndUserId(id, user.getId())
                 .orElseThrow(() -> new TaskNotFoundException(id));
     }
 
     @Transactional
-    public GroupResponse createGroup(GroupCreateRequest request) {
+    public GroupResponse createGroup(User user, GroupCreateRequest request) {
         String name = request.getName().trim();
         if (name.isEmpty()) {
             throw new IllegalArgumentException("Project name is required");
         }
 
-        List<TaskGroup> existing = taskGroupRepository.findAllByOrderBySortOrderAsc();
-        int nextOrder = existing.stream().mapToInt(TaskGroup::getSortOrder).max().orElse(-1) + 1;
+        List<TaskGroup> existing = taskGroupRepository.findByUser_IdOrderBySortOrderAsc(user.getId());
+        for (TaskGroup existingGroup : existing) {
+            existingGroup.setSortOrder(existingGroup.getSortOrder() + 1);
+            taskGroupRepository.save(existingGroup);
+        }
 
         TaskGroup group = new TaskGroup();
+        group.setUser(user);
         group.setName(name);
-        group.setColor(resolveGroupColor(request.getColor(), nextOrder));
-        group.setSortOrder(nextOrder);
+        group.setColor(resolveGroupColor(request.getColor(), 0));
+        group.setSortOrder(0);
         TaskGroup saved = taskGroupRepository.save(group);
-        writeBackupSnapshot();
+        writeBackupSnapshot(user);
         return GroupResponse.from(saved, 0);
     }
 
     @Transactional
-    public GroupResponse updateGroup(Long id, GroupUpdateRequest request) {
-        TaskGroup group = taskGroupRepository.findById(id)
-                .orElseThrow(() -> new GroupNotFoundException(id));
+    public GroupResponse updateGroup(User user, Long id, GroupUpdateRequest request) {
+        TaskGroup group = requireGroup(user, id);
 
         if (request.getName() != null) {
             String name = request.getName().trim();
@@ -182,15 +212,14 @@ public class BoardService {
         }
 
         TaskGroup saved = taskGroupRepository.save(group);
-        writeBackupSnapshot();
+        writeBackupSnapshot(user);
         long count = taskRepository.countByGroup_IdAndDeletedAtIsNull(id);
         return GroupResponse.from(saved, count);
     }
 
     @Transactional
-    public void deleteGroup(Long id) {
-        TaskGroup group = taskGroupRepository.findById(id)
-                .orElseThrow(() -> new GroupNotFoundException(id));
+    public void deleteGroup(User user, Long id) {
+        TaskGroup group = requireGroup(user, id);
 
         Instant now = Instant.now();
         for (Task task : taskRepository.findByGroup_IdAndDeletedAtIsNullOrderBySortOrderAsc(id)) {
@@ -199,13 +228,13 @@ public class BoardService {
         }
 
         taskGroupRepository.delete(group);
-        writeBackupSnapshot();
+        writeBackupSnapshot(user);
     }
 
     @Transactional
-    public BoardResponse reorderGroups(GroupReorderRequest request) {
+    public BoardResponse reorderGroups(User user, GroupReorderRequest request) {
         List<Long> orderedIds = request.getGroupIds();
-        List<TaskGroup> existing = taskGroupRepository.findAllByOrderBySortOrderAsc();
+        List<TaskGroup> existing = taskGroupRepository.findByUser_IdOrderBySortOrderAsc(user.getId());
 
         if (orderedIds.size() != existing.size()) {
             throw new IllegalArgumentException("Group order must include every project");
@@ -227,8 +256,8 @@ public class BoardService {
             taskGroupRepository.save(group);
         }
 
-        writeBackupSnapshot();
-        return getBoard();
+        writeBackupSnapshot(user);
+        return getBoard(user);
     }
 
     private static final String[] DEFAULT_GROUP_COLORS = {
@@ -244,29 +273,29 @@ public class BoardService {
     }
 
     @Transactional
-    public GroupResponse renameGroup(Long id, String name) {
+    public GroupResponse renameGroup(User user, Long id, String name) {
         GroupUpdateRequest request = new GroupUpdateRequest();
         request.setName(name);
-        return updateGroup(id, request);
+        return updateGroup(user, id, request);
     }
 
     @Transactional
-    public Task create(TaskRequest request) {
+    public Task create(User user, TaskRequest request) {
         Task task = new Task();
         task.setTitle(request.getTitle().trim());
         task.setDescription(normalizeDescription(request.getDescription()));
         task.setDone(false);
         task.setPriority(TaskPriority.NONE);
-        applyGroupAndOrder(task, request.getGroupId(), request.getSortOrder());
-        writeBackupBeforePersist(List.of(task));
+        applyGroupAndOrder(user, task, request.getGroupId(), request.getSortOrder());
+        writeBackupBeforePersist(user, List.of(task));
         Task saved = taskRepository.save(task);
-        writeBackupSnapshot();
+        writeBackupSnapshot(user);
         return saved;
     }
 
     @Transactional
-    public Task update(Long id, TaskRequest request) {
-        Task task = findById(id);
+    public Task update(User user, Long id, TaskRequest request) {
+        Task task = findById(user, id);
         if (task.isDeleted()) {
             throw new TaskNotFoundException(id);
         }
@@ -280,75 +309,107 @@ public class BoardService {
             task.setDone(request.getDone());
         }
         if (request.getGroupId() != null || request.getSortOrder() != null) {
-            applyGroupAndOrder(task, request.getGroupId(), request.getSortOrder());
+            applyGroupAndOrder(user, task, request.getGroupId(), request.getSortOrder());
         }
-        writeBackupSnapshot();
+        writeBackupSnapshot(user);
         return taskRepository.save(task);
     }
 
     @Transactional
-    public Task setDone(Long id, boolean done) {
-        Task task = findActiveTask(id);
+    public Task setDone(User user, Long id, boolean done) {
+        Task task = findActiveTask(user, id);
         task.setDone(done);
         Task saved = taskRepository.save(task);
-        writeBackupSnapshot();
+        writeBackupSnapshot(user);
         return saved;
     }
 
     @Transactional
-    public Task setPriority(Long id, TaskPriority priority) {
-        Task task = findActiveTask(id);
+    public Task setPriority(User user, Long id, TaskPriority priority) {
+        Task task = findActiveTask(user, id);
         task.setPriority(priority != null ? priority : TaskPriority.NONE);
         Task saved = taskRepository.save(task);
-        writeBackupSnapshot();
+        writeBackupSnapshot(user);
         return saved;
     }
 
     @Transactional(readOnly = true)
-    public TaskResponse toTaskResponse(Task task) {
+    public TaskResponse toTaskResponse(User user, Task task) {
+        requireOwnedTask(user, task);
         List<TaskComment> comments = taskCommentRepository.findByTask_IdOrderByCreatedAtAsc(task.getId());
         return TaskResponse.from(task, comments);
     }
 
     @Transactional
-    public CommentResponse addComment(Long taskId, CommentRequest request) {
-        Task task = findActiveTask(taskId);
+    public CommentResponse addComment(User user, Long taskId, CommentRequest request) {
+        Task task = findActiveTask(user, taskId);
         TaskComment comment = new TaskComment();
         comment.setTask(task);
         comment.setText(request.getText().trim());
         TaskComment saved = taskCommentRepository.save(comment);
-        writeBackupSnapshot();
+        writeBackupSnapshot(user);
         return CommentResponse.from(saved);
     }
 
     @Transactional
-    public void softDelete(Long id) {
-        Task task = findActiveTask(id);
-        task.setDeletedAt(Instant.now());
-        taskRepository.save(task);
-        writeBackupSnapshot();
+    public CommentResponse updateComment(User user, Long taskId, Long commentId, CommentRequest request) {
+        findActiveTask(user, taskId);
+        TaskComment comment = taskCommentRepository.findById(commentId)
+                .orElseThrow(() -> new CommentNotFoundException(commentId));
+        if (!taskId.equals(comment.getTaskId())) {
+            throw new CommentNotFoundException(commentId);
+        }
+        String text = request.getText().trim();
+        if (text.isEmpty()) {
+            throw new IllegalArgumentException("Comment text is required");
+        }
+        comment.setText(text);
+        TaskComment saved = taskCommentRepository.save(comment);
+        writeBackupSnapshot(user);
+        return CommentResponse.from(saved);
     }
 
     @Transactional
-    public Task restore(Long id) {
-        Task task = findById(id);
+    public void deleteComment(User user, Long taskId, Long commentId) {
+        findActiveTask(user, taskId);
+        TaskComment comment = taskCommentRepository.findById(commentId)
+                .orElseThrow(() -> new CommentNotFoundException(commentId));
+        if (!taskId.equals(comment.getTaskId())) {
+            throw new CommentNotFoundException(commentId);
+        }
+        taskCommentRepository.delete(comment);
+        writeBackupSnapshot(user);
+    }
+
+    @Transactional
+    public void softDelete(User user, Long id) {
+        Task task = findActiveTask(user, id);
+        task.setDeletedAt(Instant.now());
+        taskRepository.save(task);
+        writeBackupSnapshot(user);
+    }
+
+    @Transactional
+    public Task restore(User user, Long id) {
+        Task task = findById(user, id);
         if (!task.isDeleted()) {
             throw new IllegalArgumentException("Task is not in recycle bin");
         }
         task.setDeletedAt(null);
         Task saved = taskRepository.save(task);
-        writeBackupSnapshot();
+        writeBackupSnapshot(user);
         return saved;
     }
 
     @Transactional
-    public BoardResponse reorder(TaskReorderRequest request) {
+    public BoardResponse reorder(User user, TaskReorderRequest request) {
         Map<Long, TaskGroup> groupsById = new HashMap<>();
-        taskGroupRepository.findAll().forEach(group -> groupsById.put(group.getId(), group));
+        taskGroupRepository.findByUser_IdOrderBySortOrderAsc(user.getId())
+                .forEach(group -> groupsById.put(group.getId(), group));
 
         List<Task> modified = new ArrayList<>();
         for (TaskReorderItem item : request.getItems()) {
-            Task task = findActiveTask(item.getTaskId());
+            Task task = findActiveTask(user, item.getTaskId());
             if (item.getGroupId() != null) {
                 TaskGroup group = groupsById.get(item.getGroupId());
                 if (group == null) {
@@ -362,22 +423,35 @@ public class BoardService {
             modified.add(task);
         }
 
-        List<Task> snapshot = new ArrayList<>(taskRepository.findAllWithGroupOrderBySortOrderAscCreatedAtAsc());
+        List<Task> snapshot = new ArrayList<>(
+                taskRepository.findAllByUserIdWithGroupOrderBySortOrderAscCreatedAtAsc(user.getId()));
         Map<Long, Task> modifiedById = new HashMap<>();
         modified.forEach(task -> modifiedById.put(task.getId(), task));
         snapshot.replaceAll(task -> modifiedById.getOrDefault(task.getId(), task));
-        writeBackupList(snapshot);
+        writeBackupList(user, snapshot);
 
         taskRepository.saveAll(modified);
-        return getBoard();
+        return getBoard(user);
     }
 
-    private Task findActiveTask(Long id) {
-        Task task = findById(id);
+    private Task findActiveTask(User user, Long id) {
+        Task task = findById(user, id);
         if (task.isDeleted()) {
             throw new TaskNotFoundException(id);
         }
         return task;
+    }
+
+    private TaskGroup requireGroup(User user, Long id) {
+        return taskGroupRepository.findByIdAndUser_Id(id, user.getId())
+                .orElseThrow(() -> new GroupNotFoundException(id));
+    }
+
+    private void requireOwnedTask(User user, Task task) {
+        if (task.getGroup() == null || task.getGroup().getUser() == null
+                || !user.getId().equals(task.getGroup().getUser().getId())) {
+            throw new TaskNotFoundException(task.getId());
+        }
     }
 
     private Map<Long, List<TaskComment>> loadCommentsByTaskIds(List<Long> taskIds) {
@@ -388,10 +462,9 @@ public class BoardService {
                 .collect(Collectors.groupingBy(TaskComment::getTaskId));
     }
 
-    private void applyGroupAndOrder(Task task, Long groupId, Integer sortOrder) {
+    private void applyGroupAndOrder(User user, Task task, Long groupId, Integer sortOrder) {
         if (groupId != null) {
-            TaskGroup group = taskGroupRepository.findById(groupId)
-                    .orElseThrow(() -> new GroupNotFoundException(groupId));
+            TaskGroup group = requireGroup(user, groupId);
             task.setGroup(group);
         }
         if (sortOrder != null) {
@@ -402,21 +475,25 @@ public class BoardService {
         }
     }
 
-    private void writeBackupBeforePersist(List<Task> pending) {
-        List<Task> snapshot = new ArrayList<>(taskRepository.findAllWithGroupOrderBySortOrderAscCreatedAtAsc());
+    private void writeBackupBeforePersist(User user, List<Task> pending) {
+        List<Task> snapshot = new ArrayList<>(
+                taskRepository.findAllByUserIdWithGroupOrderBySortOrderAscCreatedAtAsc(user.getId()));
         snapshot.addAll(pending);
-        writeBackupList(snapshot);
+        writeBackupList(user, snapshot);
     }
 
-    private void writeBackupSnapshot() {
-        writeBackupList(taskRepository.findAllWithGroupOrderBySortOrderAscCreatedAtAsc());
+    private void writeBackupSnapshot(User user) {
+        writeBackupList(user, taskRepository.findAllByUserIdWithGroupOrderBySortOrderAscCreatedAtAsc(user.getId()));
     }
 
-    private void writeBackupList(List<Task> tasks) {
-        List<TaskGroup> groups = taskGroupRepository.findAllByOrderBySortOrderAsc();
-        List<TaskComment> comments = taskCommentRepository.findAll();
+    private void writeBackupList(User user, List<Task> tasks) {
+        List<TaskGroup> groups = taskGroupRepository.findByUser_IdOrderBySortOrderAsc(user.getId());
+        List<Long> taskIds = tasks.stream().map(Task::getId).filter(id -> id != null).toList();
+        List<TaskComment> comments = taskIds.isEmpty()
+                ? List.of()
+                : taskCommentRepository.findByTask_IdInOrderByCreatedAtAsc(taskIds);
         try {
-            jsonBackupService.saveBoard(groups, tasks, comments);
+            jsonBackupService.saveBoard(user.getId(), groups, tasks, comments);
         } catch (IOException e) {
             throw new IllegalStateException("Failed to write JSON backup", e);
         }

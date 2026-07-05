@@ -1,9 +1,10 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { useEffect, useRef, useState } from 'react'
-import type { Task } from '../types/board'
-import { DEFAULT_TASK_TITLE } from '../constants/tasks'
-import { getPriorityBorderColor, getPriorityOption, type TaskPriority } from '../types/priority'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { Task, TaskComment } from '../types/board'
+import { DEFAULT_TASK_TITLE, AUTO_EDIT_BLUR_GRACE_MS } from '../constants/tasks'
+import { getPriorityOption, type TaskPriority } from '../types/priority'
+import { focusNewTaskTitleInput, scheduleFocusNewTaskTitleInput } from '../utils/focusNewTaskTitle'
 import CommentComposer from './CommentComposer'
 import PriorityPicker from './PriorityPicker'
 import TaskCommentsPanel from './TaskCommentsPanel'
@@ -11,43 +12,60 @@ import TaskContextMenu from './TaskContextMenu'
 
 interface TaskRowProps {
   task: Task
+  wrapTaskTitles?: boolean
   expanded: boolean
   doubleClickRename: boolean
   autoEditTitle?: boolean
   stackPosition?: 'only' | 'first' | 'middle' | 'last'
   seamGapAbove?: boolean
   seamGapBelow?: boolean
+  seamZone?: 'left' | 'right' | null
+  variant?: 'stacked' | 'standalone'
+  dragWithOverlay?: boolean
   onAutoEditConsumed?: () => void
   onToggleExpand: (task: Task) => void
   onToggleDone: (task: Task) => void
   onSetPriority: (task: Task, priority: TaskPriority) => void
   onRenameTitle: (task: Task, title: string) => Promise<void>
   onAddComment: (task: Task, text: string) => Promise<void>
+  onUpdateComment: (task: Task, commentId: number, text: string) => Promise<void>
+  onDeleteComment: (task: Task, commentId: number) => Promise<void>
   onDelete: (task: Task) => void
 }
 
 export default function TaskRow({
   task,
+  wrapTaskTitles = false,
   expanded,
   doubleClickRename,
   autoEditTitle = false,
   stackPosition,
   seamGapAbove = false,
   seamGapBelow = false,
+  seamZone = null,
+  variant = 'stacked',
+  dragWithOverlay = false,
   onAutoEditConsumed,
   onToggleExpand,
   onToggleDone,
   onSetPriority,
   onRenameTitle,
   onAddComment,
+  onUpdateComment,
+  onDeleteComment,
   onDelete,
 }: TaskRowProps) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(task.title)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
   const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const autoEditStartedRef = useRef(false)
+  const pendingAutoFocusRef = useRef(false)
+  const wasAutoEditRef = useRef(false)
+  const autoEditStartedAtRef = useRef(0)
+  const isStandalone = variant === 'standalone'
+  const useDragPlaceholder = isStandalone || dragWithOverlay
+
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `task-${task.id}`,
     data: { type: 'task', taskId: task.id, groupId: task.groupId },
@@ -55,7 +73,7 @@ export default function TaskRow({
 
   const style = {
     transform: CSS.Transform.toString(transform),
-    transition: isDragging ? transition : undefined,
+    transition: isDragging ? undefined : transition,
   }
 
   useEffect(() => {
@@ -63,17 +81,19 @@ export default function TaskRow({
   }, [task.title])
 
   useEffect(() => {
-    if (editing) {
+    if (editing && !autoEditTitle) {
       inputRef.current?.focus()
       inputRef.current?.select()
     }
-  }, [editing])
+  }, [editing, autoEditTitle])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!autoEditTitle) {
-      autoEditStartedRef.current = false
       return
     }
+    wasAutoEditRef.current = true
+    pendingAutoFocusRef.current = true
+    autoEditStartedAtRef.current = performance.now()
     if (clickTimeoutRef.current) {
       clearTimeout(clickTimeoutRef.current)
       clickTimeoutRef.current = null
@@ -82,17 +102,21 @@ export default function TaskRow({
     setEditing(true)
   }, [autoEditTitle, task.id, task.title])
 
-  useEffect(() => {
-    if (!editing || !autoEditTitle || autoEditStartedRef.current) {
+  function bindAutoEditInputRef(node: HTMLInputElement | null) {
+    inputRef.current = node
+    if (node && pendingAutoFocusRef.current) {
+      pendingAutoFocusRef.current = false
+      scheduleFocusNewTaskTitleInput(() => node)
+    }
+  }
+
+  function finishAutoEditSession() {
+    if (!wasAutoEditRef.current) {
       return
     }
-    autoEditStartedRef.current = true
-    requestAnimationFrame(() => {
-      inputRef.current?.focus()
-      inputRef.current?.select()
-      onAutoEditConsumed?.()
-    })
-  }, [editing, autoEditTitle, onAutoEditConsumed])
+    wasAutoEditRef.current = false
+    onAutoEditConsumed?.()
+  }
 
   useEffect(() => {
     return () => {
@@ -108,7 +132,7 @@ export default function TaskRow({
   }
 
   function handleRowClick() {
-    if (editing) {
+    if (editing || autoEditTitle || wasAutoEditRef.current) {
       return
     }
     if (clickTimeoutRef.current) {
@@ -136,9 +160,29 @@ export default function TaskRow({
     startRename()
   }
 
+  function handleTitleBlur() {
+    window.setTimeout(() => {
+      if (document.activeElement === inputRef.current) {
+        return
+      }
+
+      const inAutoEditGrace =
+        wasAutoEditRef.current &&
+        performance.now() - autoEditStartedAtRef.current < AUTO_EDIT_BLUR_GRACE_MS
+
+      if (inAutoEditGrace) {
+        scheduleFocusNewTaskTitleInput(() => inputRef.current)
+        return
+      }
+
+      void commitRename()
+    }, 0)
+  }
+
   async function commitRename() {
     const next = draft.trim() || DEFAULT_TASK_TITLE
     setEditing(false)
+    finishAutoEditSession()
     setDraft(next)
     if (next === task.title) {
       return
@@ -148,48 +192,87 @@ export default function TaskRow({
 
   const commentCount = task.comments?.length ?? 0
   const priorityOption = getPriorityOption(task.priority ?? 'NONE')
-  const usePriorityBorder = priorityOption.value !== 'NONE'
+  const usePriorityAccent = priorityOption.value !== 'NONE'
+
+  const hasStackShadow = !isStandalone && stackPosition !== 'middle' && stackPosition !== 'first'
 
   const cardStyle = {
     ...style,
-    ...(usePriorityBorder ? { borderColor: getPriorityBorderColor(task.priority ?? 'NONE') } : {}),
+    ...(hasStackShadow && !usePriorityAccent ? { boxShadow: '0 1px 2px rgba(16, 24, 40, 0.04)' } : {}),
+    ...(usePriorityAccent
+      ? {
+          boxShadow: [
+            hasStackShadow && !usePriorityAccent ? '0 1px 2px rgba(16, 24, 40, 0.04)' : null,
+            `inset 2px 0 0 ${priorityOption.color}`,
+          ]
+            .filter(Boolean)
+            .join(', '),
+        }
+      : {}),
   }
 
-  const cardBorderClass = usePriorityBorder
-    ? ''
-    : task.done
-      ? 'border-[#DCFCE7]'
-      : expanded
-        ? 'border-brand-200'
-        : 'border-surface-border'
+  const cardBorderClass = task.done
+    ? 'border-[#DCFCE7]'
+    : expanded
+      ? 'border-brand-200'
+      : 'border-surface-border'
 
   const cardBgClass = isDragging
-    ? 'bg-white opacity-50'
+    ? useDragPlaceholder
+      ? 'relative opacity-0'
+      : `relative z-20 opacity-100 shadow-lg ${task.done ? 'bg-[#F0FDF4]' : 'bg-white'}`
     : task.done
       ? 'bg-[#F0FDF4] opacity-100'
       : 'bg-white opacity-100'
 
-  const stackRadiusClass = (() => {
-    const roundTop =
-      seamGapAbove || stackPosition === 'only' || stackPosition === 'first' || stackPosition === undefined
-    const roundBottom =
-      seamGapBelow || stackPosition === 'only' || stackPosition === 'last' || stackPosition === undefined
-    if (roundTop && roundBottom) {
-      return 'rounded-2xl'
+  const stackRadiusClass = isStandalone
+    ? 'rounded-2xl'
+    : (() => {
+    const isOnly = stackPosition === 'only' || stackPosition === undefined
+    const isFirst = stackPosition === 'first'
+    const isLast = stackPosition === 'last'
+
+    let topLeft = isOnly || isFirst ? 'rounded-tl-2xl' : 'rounded-tl-none'
+    let topRight = isOnly || isFirst ? 'rounded-tr-2xl' : 'rounded-tr-none'
+    let bottomLeft = isOnly || isLast ? 'rounded-bl-2xl' : 'rounded-bl-none'
+    let bottomRight = isOnly || isLast ? 'rounded-br-2xl' : 'rounded-br-none'
+
+    if (seamGapAbove && seamZone === 'left') {
+      topLeft = 'rounded-tl-2xl'
+      if (!isOnly && !isFirst) {
+        topRight = 'rounded-tr-none'
+      }
+    } else if (seamGapAbove && seamZone === 'right') {
+      topRight = 'rounded-tr-2xl'
+      if (!isOnly && !isFirst) {
+        topLeft = 'rounded-tl-none'
+      }
     }
-    if (roundTop) {
-      return 'rounded-t-2xl rounded-b-none'
+
+    if (seamGapBelow && seamZone === 'left') {
+      bottomLeft = 'rounded-bl-2xl'
+      if (!isOnly && !isLast) {
+        bottomRight = 'rounded-br-none'
+      }
+    } else if (seamGapBelow && seamZone === 'right') {
+      bottomRight = 'rounded-br-2xl'
+      if (!isOnly && !isLast) {
+        bottomLeft = 'rounded-bl-none'
+      }
     }
-    if (roundBottom) {
-      return 'rounded-b-2xl rounded-t-none'
-    }
-    return 'rounded-none'
+
+    return `${topLeft} ${topRight} ${bottomLeft} ${bottomRight}`
   })()
 
-  const stackShadowClass =
-    stackPosition === 'middle' || stackPosition === 'first'
-      ? 'shadow-none'
+  const stackShadowClass = isStandalone
+    ? usePriorityAccent
+      ? ''
       : 'shadow-card'
+    : usePriorityAccent
+      ? ''
+      : stackPosition === 'middle' || stackPosition === 'first'
+        ? 'shadow-none'
+        : 'shadow-card'
 
   return (
     <>
@@ -197,14 +280,22 @@ export default function TaskRow({
         ref={setNodeRef}
         data-task-id={task.id}
         style={cardStyle}
-        className={`overflow-visible border ${stackRadiusClass} ${stackShadowClass} transition-[opacity,background-color,border-color,box-shadow,border-radius] duration-200 ease-out ${cardBorderClass} ${cardBgClass}`}
-        onContextMenu={handleContextMenu}
+        className={`relative overflow-hidden border ${stackRadiusClass} ${stackShadowClass} transition-[opacity,background-color,border-color,box-shadow,border-radius] duration-200 ease-out ${cardBorderClass} ${cardBgClass}`}
+        {...attributes}
       >
-        <div className="flex cursor-pointer items-center gap-3 px-4 py-3" onClick={handleRowClick}>
+        <div
+          className={`flex touch-none gap-3 px-4 py-3 ${
+            wrapTaskTitles ? 'items-start' : 'items-center'
+          } ${editing ? 'cursor-default' : isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+          onClick={handleRowClick}
+          onContextMenu={handleContextMenu}
+          {...(editing ? {} : listeners)}
+        >
           <button
             type="button"
             role="checkbox"
             aria-checked={task.done}
+            onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation()
               onToggleDone(task)
@@ -234,11 +325,19 @@ export default function TaskRow({
 
           {editing ? (
             <input
-              ref={inputRef}
+              ref={bindAutoEditInputRef}
+              data-testid="task-title-input"
               value={draft}
+              autoFocus={autoEditTitle}
               onChange={(event) => setDraft(event.target.value)}
+              onFocus={(event) => {
+                if (wasAutoEditRef.current || pendingAutoFocusRef.current) {
+                  focusNewTaskTitleInput(event.currentTarget)
+                }
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => event.stopPropagation()}
-              onBlur={() => void commitRename()}
+              onBlur={handleTitleBlur}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') {
                   event.preventDefault()
@@ -247,6 +346,7 @@ export default function TaskRow({
                 if (event.key === 'Escape') {
                   setDraft(task.title)
                   setEditing(false)
+                  finishAutoEditSession()
                 }
               }}
               className="min-w-0 flex-1 rounded-lg border border-brand-500 bg-white px-2 py-1 text-sm text-surface-text outline-none ring-2 ring-brand-100"
@@ -255,7 +355,9 @@ export default function TaskRow({
             <span
               onDoubleClick={handleTitleDoubleClick}
               title={doubleClickRename ? 'Double-click to rename' : 'Right-click to rename'}
-              className={`min-w-0 flex-1 truncate text-sm transition-[color,opacity] duration-200 ease-out ${
+              className={`min-w-0 flex-1 self-center text-sm transition-[color,opacity] duration-200 ease-out ${
+                wrapTaskTitles ? 'whitespace-normal break-words leading-snug' : 'truncate'
+              } ${
                 task.done
                   ? 'text-[#6B9080] line-through decoration-[#9DC4AD]/80'
                   : 'text-surface-text'
@@ -280,19 +382,16 @@ export default function TaskRow({
 
           <div
             className="relative flex shrink-0 items-center gap-0.5"
+            onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => event.stopPropagation()}
           >
             <PriorityPicker
               priority={task.priority ?? 'NONE'}
               onChange={(priority) => onSetPriority(task, priority)}
             />
-            <button
-              type="button"
-              className="flex h-7 w-7 cursor-grab touch-none items-center justify-center rounded-lg text-surface-muted transition-colors duration-150 hover:bg-[#F3F3F6] hover:text-surface-text active:cursor-grabbing"
-              aria-label="Drag task"
-              onClick={(event) => event.stopPropagation()}
-              {...attributes}
-              {...listeners}
+            <span
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-surface-muted"
+              aria-hidden="true"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                 <circle cx="9" cy="7" r="1.5" />
@@ -302,10 +401,11 @@ export default function TaskRow({
                 <circle cx="9" cy="17" r="1.5" />
                 <circle cx="15" cy="17" r="1.5" />
               </svg>
-            </button>
+            </span>
           </div>
         </div>
 
+        {!isDragging && (
         <div
           className={`comment-panel-grid overflow-hidden rounded-b-2xl ${
             expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
@@ -313,14 +413,28 @@ export default function TaskRow({
         >
           <div className={`min-h-0 overflow-hidden ${expanded ? '' : 'pointer-events-none'}`}>
             {(task.comments?.length ?? 0) > 0 && (
-              <TaskCommentsPanel comments={task.comments ?? []} />
+              <TaskCommentsPanel
+                comments={task.comments ?? []}
+                onUpdateComment={(comment: TaskComment, text: string) =>
+                  onUpdateComment(task, comment.id, text)
+                }
+                onDeleteComment={(comment: TaskComment) => onDeleteComment(task, comment.id)}
+              />
             )}
-            <CommentComposer
-              expanded={expanded}
-              onAddComment={(text) => onAddComment(task, text)}
-            />
+            <div
+              onContextMenu={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+              }}
+            >
+              <CommentComposer
+                expanded={expanded}
+                onAddComment={(text) => onAddComment(task, text)}
+              />
+            </div>
           </div>
         </div>
+        )}
       </div>
 
       {menu && (
