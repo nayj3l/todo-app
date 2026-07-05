@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { TaskGroup } from '../types/board'
 import type { GroupTaskSummary } from '../utils/groupStats'
 import type { GroupDragHandleProps } from './SortableGroupSection'
+import ProjectContextMenu from './ProjectContextMenu'
 
 interface GroupHeaderProps {
   group: TaskGroup
@@ -10,6 +11,7 @@ interface GroupHeaderProps {
   showTaskBreakdown: boolean
   showProgressBar: boolean
   onRename: (groupId: number, name: string) => Promise<void>
+  onDelete?: (group: TaskGroup) => void
   dragHandle?: GroupDragHandleProps
 }
 
@@ -20,10 +22,12 @@ export default function GroupHeader({
   showTaskBreakdown,
   showProgressBar,
   onRename,
+  onDelete,
   dragHandle,
 }: GroupHeaderProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(group.name)
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -56,7 +60,16 @@ export default function GroupHeader({
 
   return (
     <div className="mb-3">
-      <div className="group/header flex items-center gap-3 rounded-xl px-4 py-3 transition hover:bg-[#FAFAFB]">
+      <div
+        className="group/header flex items-center gap-3 rounded-xl px-4 py-3 transition hover:bg-[#FAFAFB]"
+        onContextMenu={(event) => {
+          if (editing || !onDelete) {
+            return
+          }
+          event.preventDefault()
+          setMenu({ x: event.clientX, y: event.clientY })
+        }}
+      >
         <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: group.color }} />
         {editing ? (
           <input
@@ -81,7 +94,7 @@ export default function GroupHeader({
             type="button"
             onClick={() => setEditing(true)}
             className="min-w-0 flex-1 truncate text-left text-base font-semibold text-surface-text transition hover:text-brand-600"
-            title="Click to rename project"
+            title="Click to rename board"
           >
             {group.name}
           </button>
@@ -151,6 +164,15 @@ export default function GroupHeader({
             <span className="shrink-0 text-[11px] tabular-nums text-surface-muted/70">{summary.progress}%</span>
           )}
         </div>
+      )}
+      {menu && onDelete && (
+        <ProjectContextMenu
+          x={menu.x}
+          y={menu.y}
+          onRename={() => setEditing(true)}
+          onDelete={() => onDelete(group)}
+          onClose={() => setMenu(null)}
+        />
       )}
     </div>
   )

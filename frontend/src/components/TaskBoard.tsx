@@ -28,6 +28,7 @@ import TaskDragPreview from './TaskDragPreview'
 import TaskInsertSlot from './TaskInsertSlot'
 import TaskRow from './TaskRow'
 import TaskSearchBar from './TaskSearchBar'
+import ConfirmDialog from './ConfirmDialog'
 import { isFilterActive, taskMatchesFilters } from '../utils/taskFilters'
 import { summarizeGroupTasks } from '../utils/groupStats'
 import { AUTO_EDIT_FOCUS_KEEPALIVE_MS } from '../constants/tasks'
@@ -51,6 +52,8 @@ interface TaskBoardProps {
   onUpdateComment: (task: Task, commentId: number, text: string) => Promise<void>
   onDeleteComment: (task: Task, commentId: number) => Promise<void>
   onDeleteTask: (task: Task) => Promise<void>
+  onDeleteTasks: (tasks: Task[]) => Promise<void>
+  onDeleteGroup: (groupId: number) => Promise<void>
   onSelectGroup: (groupId: number) => void
   searchQuery: string
   priorityFilter: PriorityFilterValue
@@ -179,6 +182,8 @@ export default function TaskBoard({
   onUpdateComment,
   onDeleteComment,
   onDeleteTask,
+  onDeleteTasks,
+  onDeleteGroup,
   onSelectGroup,
   searchQuery,
   priorityFilter,
@@ -199,6 +204,10 @@ export default function TaskBoard({
   const [activeTask, setActiveTask] = useState<Task | null>(null)
   const [activeGroup, setActiveGroup] = useState<TaskGroup | null>(null)
   const [expandedTaskId, setExpandedTaskId] = useState<number | null>(null)
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<number>>(() => new Set())
+  const [deleteBoardTarget, setDeleteBoardTarget] = useState<TaskGroup | null>(null)
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false)
   const [seamHover, setSeamHover] = useState<{
     insertIndex: number
     edge: 'top' | 'bottom'
@@ -357,6 +366,44 @@ export default function TaskBoard({
     return () => window.clearTimeout(timer)
   }, [boardView, isCarouselView])
 
+  const visibleSelectableTasks = useMemo(
+    () => scopedTasks.filter((task) => taskMatchesFilters(task, searchQuery, priorityFilter)),
+    [scopedTasks, searchQuery, priorityFilter],
+  )
+
+  function exitSelectionMode() {
+    setSelectionMode(false)
+    setSelectedTaskIds(new Set())
+  }
+
+  function toggleTaskSelected(task: Task) {
+    setSelectedTaskIds((current) => {
+      const next = new Set(current)
+      if (next.has(task.id)) {
+        next.delete(task.id)
+      } else {
+        next.add(task.id)
+      }
+      return next
+    })
+  }
+
+  function selectAllVisibleTasks() {
+    setSelectedTaskIds(new Set(visibleSelectableTasks.map((task) => task.id)))
+  }
+
+  function taskSelectionProps(taskId: number) {
+    return {
+      selectionMode,
+      selected: selectedTaskIds.has(taskId),
+      onToggleSelected: toggleTaskSelected,
+    }
+  }
+
+  useEffect(() => {
+    exitSelectionMode()
+  }, [activeGroupId])
+
   const boardViewEnterClass =
     viewEnterFrom === 'columns'
       ? 'board-view-enter-columns'
@@ -373,7 +420,7 @@ export default function TaskBoard({
           </p>
         )
       }
-      return <AddTaskCard onClick={() => handleCreateTaskAt(group.id, 0)} />
+      return selectionMode ? null : <AddTaskCard onClick={() => handleCreateTaskAt(group.id, 0)} />
     }
 
     if (columnLayout) {
@@ -397,10 +444,11 @@ export default function TaskBoard({
               onUpdateComment={handleUpdateComment}
               onDeleteComment={handleDeleteComment}
               onDelete={handleDeleteTask}
+              {...taskSelectionProps(task.id)}
             />
             </div>
           ))}
-          {!activeTask && (
+          {!activeTask && !selectionMode && (
             <AddTaskCard onClick={() => handleCreateTaskAt(group.id, groupTasksList.length)} />
           )}
         </div>
@@ -444,7 +492,7 @@ export default function TaskBoard({
               key={task.id}
               className={`relative ${useStandaloneListLayout || taskIndex === 0 ? '' : '-mt-px'}`}
             >
-              {!activeTask && (
+              {!activeTask && !selectionMode && (
                 <TaskInsertSlot
                   onInsert={() => handleCreateTaskAt(group.id, taskIndex)}
                   onHoverChange={(active, zone) => {
@@ -473,8 +521,9 @@ export default function TaskBoard({
                 onUpdateComment={handleUpdateComment}
                 onDeleteComment={handleDeleteComment}
                 onDelete={handleDeleteTask}
+                {...taskSelectionProps(task.id)}
               />
-              {!activeTask && taskIndex === groupTasksList.length - 1 && (
+              {!activeTask && !selectionMode && taskIndex === groupTasksList.length - 1 && (
                 <TaskInsertSlot
                   position="bottom"
                   onInsert={() => handleCreateTaskAt(group.id, groupTasksList.length)}
@@ -513,6 +562,7 @@ export default function TaskBoard({
             showTaskBreakdown={showProjectTaskBreakdown}
             showProgressBar={showProjectProgressBar}
             onRename={onRenameGroup}
+            onDelete={(board) => setDeleteBoardTarget(board)}
             dragHandle={dragHandle}
           />
         </div>
@@ -595,6 +645,9 @@ export default function TaskBoard({
   }
 
   function handleDragStart(event: DragStartEvent) {
+    if (selectionMode) {
+      return
+    }
     const activeId = String(event.active.id)
     setSeamHover(null)
     document.body.classList.add('is-dragging-task')
@@ -802,6 +855,17 @@ export default function TaskBoard({
     return onDeleteComment(task, commentId)
   }
 
+  function handleDeleteSelectedTasks() {
+    const selected = localTasks.filter((task) => selectedTaskIds.has(task.id))
+    if (selected.length === 0) {
+      return
+    }
+    setExpandedTaskId(null)
+    setLocalTasks((current) => current.filter((task) => !selectedTaskIds.has(task.id)))
+    exitSelectionMode()
+    void onDeleteTasks(selected)
+  }
+
   function handleDeleteTask(task: Task) {
     if (expandedTaskId === task.id) {
       setExpandedTaskId(null)
@@ -896,6 +960,37 @@ export default function TaskBoard({
           onBoardViewChange={onBoardViewChange}
           onWrapTaskTitlesChange={onWrapTaskTitlesChange}
         />
+        {!selectionMode ? (
+          <button
+            type="button"
+            onClick={() => {
+              setSelectionMode(true)
+              setSelectedTaskIds(new Set())
+            }}
+            disabled={visibleSelectableTasks.length === 0}
+            className="shrink-0 rounded-xl border border-surface-border bg-white px-3 py-2 text-sm font-medium text-surface-text shadow-card transition hover:bg-[#FAFAFB] disabled:cursor-not-allowed disabled:opacity-50"
+            title="Select multiple tasks to delete"
+          >
+            Select
+          </button>
+        ) : (
+          <div className="flex shrink-0 flex-col items-end gap-1 sm:items-stretch">
+            <button
+              type="button"
+              onClick={selectAllVisibleTasks}
+              className="rounded-lg px-2 py-1 text-xs font-medium text-brand-600 transition hover:bg-brand-50"
+            >
+              Select all
+            </button>
+            <button
+              type="button"
+              onClick={exitSelectionMode}
+              className="rounded-xl border border-surface-border bg-white px-3 py-2 text-sm font-medium text-surface-text shadow-card transition hover:bg-[#FAFAFB]"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="flex h-full min-h-0 flex-1 flex-col">
@@ -948,6 +1043,63 @@ export default function TaskBoard({
         </DragOverlay>
       </DndContext>
       </div>
+
+      {selectionMode && selectedTaskIds.size > 0 && (
+        <div
+          className="pointer-events-none fixed inset-x-0 bottom-6 z-40 flex justify-center px-4"
+          data-testid="bulk-delete-bar"
+        >
+          <div className="pointer-events-auto flex items-center gap-3 rounded-2xl border border-surface-border bg-white px-4 py-3 shadow-lg">
+            <span className="text-sm font-medium text-surface-text">
+              {selectedTaskIds.size} task{selectedTaskIds.size === 1 ? '' : 's'} selected
+            </span>
+            <button
+              type="button"
+              onClick={() => setBulkDeleteConfirmOpen(true)}
+              className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
+            >
+              Delete
+            </button>
+            <button
+              type="button"
+              onClick={exitSelectionMode}
+              className="rounded-xl border border-surface-border px-4 py-2 text-sm font-medium text-surface-text transition hover:bg-[#FAFAFB]"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={bulkDeleteConfirmOpen}
+        title={`Delete ${selectedTaskIds.size} task${selectedTaskIds.size === 1 ? '' : 's'}?`}
+        description="Selected tasks will move to the recycle bin."
+        confirmLabel="Delete"
+        onConfirm={() => {
+          handleDeleteSelectedTasks()
+          setBulkDeleteConfirmOpen(false)
+        }}
+        onCancel={() => setBulkDeleteConfirmOpen(false)}
+      />
+
+      <ConfirmDialog
+        open={deleteBoardTarget != null}
+        title="Delete board?"
+        description={
+          deleteBoardTarget
+            ? `Delete "${deleteBoardTarget.name}" and move its tasks to the recycle bin?`
+            : ''
+        }
+        confirmLabel="Delete board"
+        onConfirm={() => {
+          if (deleteBoardTarget) {
+            void onDeleteGroup(deleteBoardTarget.id)
+            setDeleteBoardTarget(null)
+          }
+        }}
+        onCancel={() => setDeleteBoardTarget(null)}
+      />
     </main>
   )
 }

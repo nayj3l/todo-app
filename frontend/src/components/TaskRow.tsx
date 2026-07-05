@@ -22,6 +22,9 @@ interface TaskRowProps {
   seamZone?: 'left' | 'right' | null
   variant?: 'stacked' | 'standalone'
   dragWithOverlay?: boolean
+  selectionMode?: boolean
+  selected?: boolean
+  onToggleSelected?: (task: Task) => void
   onAutoEditConsumed?: () => void
   onToggleExpand: (task: Task) => void
   onToggleDone: (task: Task) => void
@@ -45,6 +48,9 @@ export default function TaskRow({
   seamZone = null,
   variant = 'stacked',
   dragWithOverlay = false,
+  selectionMode = false,
+  selected = false,
+  onToggleSelected,
   onAutoEditConsumed,
   onToggleExpand,
   onToggleDone,
@@ -127,11 +133,18 @@ export default function TaskRow({
   }, [])
 
   function handleContextMenu(event: React.MouseEvent) {
+    if (selectionMode) {
+      return
+    }
     event.preventDefault()
     setMenu({ x: event.clientX, y: event.clientY })
   }
 
   function handleRowClick() {
+    if (selectionMode) {
+      onToggleSelected?.(task)
+      return
+    }
     if (editing || autoEditTitle || wasAutoEditRef.current) {
       return
     }
@@ -280,17 +293,39 @@ export default function TaskRow({
         ref={setNodeRef}
         data-task-id={task.id}
         style={cardStyle}
-        className={`relative overflow-hidden border ${stackRadiusClass} ${stackShadowClass} transition-[opacity,background-color,border-color,box-shadow,border-radius] duration-200 ease-out ${cardBorderClass} ${cardBgClass}`}
+        className={`relative overflow-hidden border ${stackRadiusClass} ${stackShadowClass} transition-[opacity,background-color,border-color,box-shadow,border-radius] duration-200 ease-out ${cardBorderClass} ${cardBgClass} ${selectionMode && selected ? 'ring-2 ring-brand-500 ring-offset-1' : ''}`}
         {...attributes}
       >
         <div
           className={`flex touch-none gap-3 px-4 py-3 ${
             wrapTaskTitles ? 'items-start' : 'items-center'
-          } ${editing ? 'cursor-default' : isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+          } ${editing ? 'cursor-default' : selectionMode ? 'cursor-pointer' : isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
           onClick={handleRowClick}
           onContextMenu={handleContextMenu}
-          {...(editing ? {} : listeners)}
+          {...(editing || selectionMode ? {} : listeners)}
         >
+          {selectionMode ? (
+            <button
+              type="button"
+              role="checkbox"
+              aria-checked={selected}
+              aria-label={`Select ${task.title}`}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation()
+                onToggleSelected?.(task)
+              }}
+              className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border transition ${
+                selected ? 'border-brand-500 bg-brand-500 text-white' : 'border-[#D5D5DE] bg-white'
+              }`}
+            >
+              {selected && (
+                <svg viewBox="0 0 12 12" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path d="M2 6l3 3 5-5" />
+                </svg>
+              )}
+            </button>
+          ) : (
           <button
             type="button"
             role="checkbox"
@@ -322,7 +357,7 @@ export default function TaskRow({
               <path d="M2 6l3 3 5-5" />
             </svg>
           </button>
-
+          )}
           {editing ? (
             <input
               ref={bindAutoEditInputRef}

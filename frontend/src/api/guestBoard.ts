@@ -12,6 +12,7 @@ import {
   type GuestDataStore,
 } from '../lib/guestDb'
 import { fetchGuestBootstrap } from './guestBootstrap'
+import { RECYCLE_BIN_LIMIT } from '../constants/recycleBin'
 export { mergeTaskUpdate } from './board'
 
 let activeGuestId: string | null = null
@@ -34,6 +35,12 @@ async function withStore<T>(fn: (store: GuestDataStore) => T | Promise<T>): Prom
   return result
 }
 
+function trimRecycleBin(store: GuestDataStore) {
+  if (store.deletedTasks.length > RECYCLE_BIN_LIMIT) {
+    store.deletedTasks = store.deletedTasks.slice(0, RECYCLE_BIN_LIMIT)
+  }
+}
+
 export async function initializeGuestData(guestId: string, forceBootstrap = false): Promise<void> {
   activeGuestId = guestId
   const existing = await loadGuestStore(guestId)
@@ -51,6 +58,12 @@ export async function getBoard(): Promise<Board> {
 
 export async function getRecycleBin(): Promise<RecycleBin> {
   return withStore((store) => recycleFromStore(store))
+}
+
+export async function clearRecycleBin(): Promise<void> {
+  await withStore((store) => {
+    store.deletedTasks = []
+  })
 }
 
 export async function reorderTasks(items: TaskReorderItem[]): Promise<Board> {
@@ -146,7 +159,7 @@ export async function updateGroup(id: number, updates: { name?: string; color?: 
   return withStore((store) => {
     const group = store.groups.find((entry) => entry.id === id)
     if (!group) {
-      throw new Error('Project not found')
+      throw new Error('Board not found')
     }
     if (updates.name != null) {
       group.name = updates.name
@@ -173,6 +186,7 @@ export async function deleteGroup(id: number): Promise<void> {
     }
     store.tasks = store.tasks.filter((task) => task.groupId !== id)
     store.groups = store.groups.filter((group) => group.id !== id)
+    trimRecycleBin(store)
   })
 }
 
@@ -182,7 +196,7 @@ export async function reorderGroups(groupIds: number[]): Promise<Board> {
     store.groups = groupIds.map((id, index) => {
       const group = groupsById.get(id)
       if (!group) {
-        throw new Error('Project not found')
+        throw new Error('Board not found')
       }
       return { ...group, sortOrder: index }
     })
@@ -244,6 +258,7 @@ export async function deleteTask(id: number): Promise<void> {
     const task = { ...store.tasks[index], deletedAt: nowIso() }
     store.deletedTasks.unshift(task)
     store.tasks.splice(index, 1)
+    trimRecycleBin(store)
   })
 }
 

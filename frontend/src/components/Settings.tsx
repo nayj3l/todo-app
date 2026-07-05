@@ -40,9 +40,9 @@ export default function Settings({ settings, onUpdateSetting }: SettingsProps) {
 
         <section className="mt-6 rounded-2xl border border-surface-border bg-white shadow-card">
           <div className="border-b border-surface-border px-5 py-4">
-            <h2 className="text-sm font-semibold text-surface-text">Project headers</h2>
+            <h2 className="text-sm font-semibold text-surface-text">Board headers</h2>
             <p className="mt-0.5 text-xs text-surface-muted">
-              Optional details shown under each project name on the board.
+              Optional details shown under each board name on the task list.
             </p>
           </div>
 
@@ -56,7 +56,7 @@ export default function Settings({ settings, onUpdateSetting }: SettingsProps) {
             <span className="min-w-0">
               <span className="block text-sm font-medium text-surface-text">Show open and done breakdown</span>
               <span className="mt-1 block text-xs leading-relaxed text-surface-muted">
-                Adds a second line under the project title with open, done, and filtered counts.
+                Adds a second line under the board title with open, done, and filtered counts.
               </span>
             </span>
           </label>
@@ -71,7 +71,7 @@ export default function Settings({ settings, onUpdateSetting }: SettingsProps) {
             <span className="min-w-0">
               <span className="block text-sm font-medium text-surface-text">Show progress bar</span>
               <span className="mt-1 block text-xs leading-relaxed text-surface-muted">
-                Displays completion progress using each project&apos;s color. Off by default so the board
+                Displays completion progress using each board&apos;s color. Off by default so the board
                 stays focused on tasks.
               </span>
             </span>
@@ -82,7 +82,7 @@ export default function Settings({ settings, onUpdateSetting }: SettingsProps) {
           <div className="border-b border-surface-border px-5 py-4">
             <h2 className="text-sm font-semibold text-surface-text">Board layout</h2>
             <p className="mt-0.5 text-xs text-surface-muted">
-              Switch between stacked list and kanban-style columns on All Projects.
+              Switch between stacked list and kanban-style columns on All Boards.
             </p>
           </div>
 

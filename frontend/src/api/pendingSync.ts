@@ -4,6 +4,7 @@ import {
   removePendingSyncItem,
   updatePendingSyncItem,
 } from '../lib/pendingSyncQueue'
+import { isBenignPendingSyncError } from '../utils/pendingSyncCoalesce'
 
 export interface FlushPendingResult {
   synced: number
@@ -21,6 +22,11 @@ export async function flushPendingSyncQueue(): Promise<FlushPendingResult> {
       removePendingSyncItem(item.id)
       synced += 1
     } catch (error) {
+      if (isBenignPendingSyncError(error)) {
+        removePendingSyncItem(item.id)
+        synced += 1
+        continue
+      }
       failed += 1
       updatePendingSyncItem(item.id, {
         attempts: item.attempts + 1,

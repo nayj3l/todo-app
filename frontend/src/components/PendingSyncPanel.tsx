@@ -1,10 +1,13 @@
+import { useState } from 'react'
 import type { PendingSyncItem } from '../types/pendingSync'
+import ConfirmDialog from './ConfirmDialog'
 
 interface PendingSyncPanelProps {
   items: PendingSyncItem[]
   syncing: boolean
   onSyncNow: () => void
   onDismiss: (id: string) => void
+  onClearAll: () => void
 }
 
 function formatWhen(iso: string) {
@@ -21,7 +24,10 @@ export default function PendingSyncPanel({
   syncing,
   onSyncNow,
   onDismiss,
+  onClearAll,
 }: PendingSyncPanelProps) {
+  const [clearOpen, setClearOpen] = useState(false)
+
   return (
     <main className="flex-1 overflow-y-auto px-8 py-8">
       <div className="mx-auto max-w-2xl">
@@ -29,18 +35,29 @@ export default function PendingSyncPanel({
           <div>
             <h1 className="text-xl font-semibold text-[#1A1A2E]">Pending sync</h1>
             <p className="mt-1 text-sm text-surface-muted">
-              Changes saved locally while offline or after failed saves. They sync automatically when
-              you&apos;re back online.
+              Changes saved locally while offline or after failed saves. They sync automatically when you&apos;re back
+              online, in order, one action at a time.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => void onSyncNow()}
-            disabled={syncing || items.length === 0 || !navigator.onLine}
-            className="shrink-0 rounded-xl bg-[#5B3FD6] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#4C34B8] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {syncing ? 'Syncing…' : 'Sync now'}
-          </button>
+          <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row">
+            {items.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setClearOpen(true)}
+                className="rounded-xl border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-600 transition hover:bg-red-50"
+              >
+                Clear all
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void onSyncNow()}
+              disabled={syncing || items.length === 0 || !navigator.onLine}
+              className="rounded-xl bg-[#5B3FD6] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#4C34B8] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {syncing ? 'Syncing…' : 'Sync now'}
+            </button>
+          </div>
         </div>
 
         {!navigator.onLine && (
@@ -65,9 +82,7 @@ export default function PendingSyncPanel({
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-[#1A1A2E]">{item.label}</p>
                     <p className="mt-0.5 text-xs text-surface-muted">{formatWhen(item.createdAt)}</p>
-                    {item.lastError && (
-                      <p className="mt-2 text-xs text-red-600">{item.lastError}</p>
-                    )}
+                    {item.lastError && <p className="mt-2 text-xs text-red-600">{item.lastError}</p>}
                   </div>
                   <button
                     type="button"
@@ -82,6 +97,18 @@ export default function PendingSyncPanel({
           </ul>
         )}
       </div>
+
+      <ConfirmDialog
+        open={clearOpen}
+        title="Clear pending sync?"
+        description="Remove all queued changes from this device. Anything not yet uploaded to the server will be discarded."
+        confirmLabel="Clear all"
+        onConfirm={() => {
+          onClearAll()
+          setClearOpen(false)
+        }}
+        onCancel={() => setClearOpen(false)}
+      />
     </main>
   )
 }

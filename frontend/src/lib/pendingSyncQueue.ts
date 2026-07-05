@@ -1,4 +1,5 @@
 import type { PendingSyncItem, PendingSyncOperation } from '../types/pendingSync'
+import { coalescePendingQueue } from '../utils/pendingSyncCoalesce'
 
 const STORAGE_KEY = 'altar-board-pending-sync'
 const CHANGE_EVENT = 'altar-pending-sync-changed'
@@ -41,8 +42,12 @@ export function enqueuePendingSync(
     attempts: 0,
     lastError,
   }
-  writeQueue([...readQueue(), item])
+  writeQueue([...coalescePendingQueue(readQueue(), operation), item])
   return item
+}
+
+export function clearAllPendingSync() {
+  writeQueue([])
 }
 
 export function removePendingSyncItem(id: string) {

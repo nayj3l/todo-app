@@ -42,6 +42,8 @@ import java.util.stream.Collectors;
 @Service
 public class BoardService {
 
+    private static final int RECYCLE_BIN_LIMIT = 50;
+
     private final TaskRepository taskRepository;
     private final TaskGroupRepository taskGroupRepository;
     private final TaskCommentRepository taskCommentRepository;
@@ -177,7 +179,7 @@ public class BoardService {
     public GroupResponse createGroup(User user, GroupCreateRequest request) {
         String name = request.getName().trim();
         if (name.isEmpty()) {
-            throw new IllegalArgumentException("Project name is required");
+            throw new IllegalArgumentException("Board name is required");
         }
 
         List<TaskGroup> existing = taskGroupRepository.findByUser_IdOrderBySortOrderAsc(user.getId());
@@ -203,7 +205,7 @@ public class BoardService {
         if (request.getName() != null) {
             String name = request.getName().trim();
             if (name.isEmpty()) {
-                throw new IllegalArgumentException("Project name is required");
+                throw new IllegalArgumentException("Board name is required");
             }
             group.setName(name);
         }
@@ -228,6 +230,7 @@ public class BoardService {
         }
 
         taskGroupRepository.delete(group);
+        enforceRecycleBinLimit(user);
         writeBackupSnapshot(user);
     }
 
@@ -237,14 +240,14 @@ public class BoardService {
         List<TaskGroup> existing = taskGroupRepository.findByUser_IdOrderBySortOrderAsc(user.getId());
 
         if (orderedIds.size() != existing.size()) {
-            throw new IllegalArgumentException("Group order must include every project");
+            throw new IllegalArgumentException("Group order must include every board");
         }
 
         java.util.Set<Long> existingIds = existing.stream()
                 .map(TaskGroup::getId)
                 .collect(java.util.stream.Collectors.toSet());
         if (!existingIds.equals(new java.util.HashSet<>(orderedIds))) {
-            throw new IllegalArgumentException("Invalid project order");
+            throw new IllegalArgumentException("Invalid board order");
         }
 
         java.util.Map<Long, TaskGroup> groupsById = existing.stream()
@@ -386,7 +389,34 @@ public class BoardService {
         Task task = findActiveTask(user, id);
         task.setDeletedAt(Instant.now());
         taskRepository.save(task);
+        enforceRecycleBinLimit(user);
         writeBackupSnapshot(user);
+    }
+
+    @Transactional
+    public void clearRecycleBin(User user) {
+        List<Task> deleted = taskRepository.findAllDeletedByUserIdOrderByDeletedAtDesc(user.getId());
+        for (Task task : deleted) {
+            permanentlyDeleteTask(task);
+        }
+        writeBackupSnapshot(user);
+    }
+
+    private void enforceRecycleBinLimit(User user) {
+        List<Task> deleted = taskRepository.findAllDeletedByUserIdOrderByDeletedAtDesc(user.getId());
+        if (deleted.size() <= RECYCLE_BIN_LIMIT) {
+            return;
+        }
+        for (int index = RECYCLE_BIN_LIMIT; index < deleted.size(); index++) {
+            permanentlyDeleteTask(deleted.get(index));
+        }
+    }
+
+    private void permanentlyDeleteTask(Task task) {
+        if (task.getId() != null) {
+            taskCommentRepository.deleteByTask_Id(task.getId());
+        }
+        taskRepository.delete(task);
     }
 
     @Transactional

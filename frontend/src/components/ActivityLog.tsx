@@ -144,7 +144,7 @@ export default function ActivityLog({ entries, onClear }: ActivityLogProps) {
         <div className="text-center">
           <p className="text-base font-semibold text-surface-text">No activity yet</p>
           <p className="mt-1 text-sm text-surface-muted">
-            Create, edit, or delete tasks and projects — snapshots will show up here.
+            Create, edit, or delete tasks and boards — snapshots will show up here.
           </p>
         </div>
       </main>

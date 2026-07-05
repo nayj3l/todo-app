@@ -17,6 +17,7 @@ export type PendingSyncOperation =
   | { kind: 'deleteComment'; taskId: number; commentId: number }
   | { kind: 'deleteTask'; taskId: number }
   | { kind: 'restoreTask'; taskId: number }
+  | { kind: 'clearRecycleBin' }
 
 export interface PendingSyncItem {
   id: string

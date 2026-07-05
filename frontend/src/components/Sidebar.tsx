@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { DEFAULT_PROJECT_NAME } from '../constants/projects'
+import { DEFAULT_BOARD_NAME } from '../constants/boards'
 import type { AuthUser } from '../types/auth'
 import type { ActiveView, TaskGroup } from '../types/board'
 import ConfirmDialog from './ConfirmDialog'
@@ -194,7 +194,7 @@ export default function Sidebar({
       return
     }
     creatingProjectRef.current = true
-    const name = newProjectName.trim() || DEFAULT_PROJECT_NAME
+    const name = newProjectName.trim() || DEFAULT_BOARD_NAME
     setCreatingProject(false)
     setNewProjectName('')
     try {
@@ -266,7 +266,7 @@ export default function Sidebar({
         data-sidebar-view="all"
         aria-current={activeView === 'all' ? 'page' : undefined}
         onClick={() => onSelectView('all')}
-        title={collapsed ? 'All projects' : undefined}
+        title={collapsed ? 'All boards' : undefined}
         className={`mb-6 flex w-full items-center rounded-xl border-l-[3px] py-2.5 text-sm transition ${navItemClass} ${sidebarNavClass(collapsed, activeView === 'all')} ${
           collapsed ? 'pl-2 pr-2' : 'justify-between pl-2.5 pr-3'
         }`}
@@ -299,7 +299,7 @@ export default function Sidebar({
             </span>
           )}
           <span className={`sidebar-label overflow-hidden whitespace-nowrap ${collapsed ? 'max-w-0 opacity-0' : 'max-w-[140px] opacity-100'}`}>
-            All
+            All boards
           </span>
         </span>
         {!collapsed && (
@@ -317,12 +317,12 @@ export default function Sidebar({
 
       {!collapsed && (
         <div className="mb-3 flex shrink-0 items-center justify-between">
-          <span className="text-xs font-semibold uppercase tracking-wide text-surface-muted">Projects</span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-surface-muted">Boards</span>
           <button
             type="button"
             onClick={() => setProjectsExpanded((current) => !current)}
             className="flex h-6 w-6 items-center justify-center rounded-md text-surface-muted transition hover:bg-[#FAFAFB] hover:text-surface-text"
-            aria-label={projectsExpanded ? 'Collapse projects' : 'Expand projects'}
+            aria-label={projectsExpanded ? 'Collapse boards' : 'Expand boards'}
             aria-expanded={projectsExpanded}
           >
             <svg
@@ -373,9 +373,9 @@ export default function Sidebar({
                         cancelCreate()
                       }
                     }}
-                    placeholder={DEFAULT_PROJECT_NAME}
+                    placeholder={DEFAULT_BOARD_NAME}
                     className="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-surface-text outline-none placeholder:text-[#B8B8C3]"
-                    aria-label="Project name"
+                    aria-label="Board name"
                   />
                 </div>
               ) : (
@@ -407,7 +407,7 @@ export default function Sidebar({
                       strokeLinecap="round"
                     />
                   </svg>
-                  <span className="min-w-0 flex-1 truncate">New project</span>
+                  <span className="min-w-0 flex-1 truncate">New board</span>
                 </button>
               )}
 

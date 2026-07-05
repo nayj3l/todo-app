@@ -146,6 +146,13 @@ public class BoardController {
         boardService.deleteComment(user, taskId, commentId);
     }
 
+    @DeleteMapping("/recycle-bin")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void clearRecycleBin() {
+        User user = currentUserService.requireUser();
+        boardService.clearRecycleBin(user);
+    }
+
     @DeleteMapping("/tasks/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteTask(@PathVariable Long id) {

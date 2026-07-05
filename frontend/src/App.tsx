@@ -9,6 +9,7 @@ import {
 } from './api/auth'
 import {
   addComment,
+  clearRecycleBin,
   createTask,
   createGroup,
   deleteComment,
@@ -52,7 +53,7 @@ import { APP_NAME } from './constants/app'
 import { DEFAULT_TASK_TITLE, TASK_CREATE_TOAST_DELAY_MS } from './constants/tasks'
 import { truncateActivityText } from './utils/activityLog'
 import { mutationFailedQueued } from './utils/mutationError'
-import { removePendingSyncItem } from './lib/pendingSyncQueue'
+import { removePendingSyncItem, clearAllPendingSync } from './lib/pendingSyncQueue'
 
 function groupNameFor(board: Board, groupId: number | null | undefined) {
   if (groupId == null) {
@@ -319,14 +320,14 @@ export default function App() {
     try {
       const updated = await reorderGroups(groups.map((group) => group.id))
       setBoard(updated)
-      completeActivity(toastId, 'Project order saved', { detail: 'Drag-and-drop reorder' })
+      completeActivity(toastId, 'Board order saved', { detail: 'Drag-and-drop reorder' })
     } catch (err) {
       if (mutationFailedQueued(err)) {
         dismissToast(toastId)
         return
       }
-      setError(err instanceof Error ? err.message : 'Failed to save project order')
-      failActivity(toastId, 'Failed to save project order')
+      setError(err instanceof Error ? err.message : 'Failed to save board order')
+      failActivity(toastId, 'Failed to save board order')
       await loadBoard()
     }
   }, [beginActivity, completeActivity, failActivity, loadBoard])
@@ -349,7 +350,7 @@ export default function App() {
         ...current,
         groups: current.groups.map((group) => (group.id === groupId ? updated : group)),
       }))
-      completeActivity(toastId, 'Project renamed', {
+      completeActivity(toastId, 'Board renamed', {
         from: previousName,
         to: name,
       })
@@ -358,8 +359,8 @@ export default function App() {
         dismissToast(toastId)
         return
       }
-      setError(err instanceof Error ? err.message : 'Failed to rename project')
-      failActivity(toastId, 'Failed to rename project')
+      setError(err instanceof Error ? err.message : 'Failed to rename board')
+      failActivity(toastId, 'Failed to rename board')
       await loadBoard()
     }
   }, [beginActivity, board.groups, completeActivity, failActivity, loadBoard])
@@ -373,14 +374,14 @@ export default function App() {
         groups: [{ ...created, sortOrder: 0 }, ...current.groups.map((group, index) => ({ ...group, sortOrder: index + 1 }))],
       }))
       setActiveView(created.id)
-      completeActivity(toastId, 'Project created', { subject: name })
+      completeActivity(toastId, 'Board created', { subject: name })
     } catch (err) {
       if (mutationFailedQueued(err)) {
         dismissToast(toastId)
         return
       }
-      setError(err instanceof Error ? err.message : 'Failed to create project')
-      failActivity(toastId, 'Failed to create project')
+      setError(err instanceof Error ? err.message : 'Failed to create board')
+      failActivity(toastId, 'Failed to create board')
     }
   }, [beginActivity, completeActivity, failActivity])
 
@@ -398,20 +399,20 @@ export default function App() {
       await deleteGroup(groupId)
       const recycleData = await getRecycleBin()
       setDeletedTasks(recycleData.tasks)
-      completeActivity(toastId, 'Project deleted', { subject: groupName })
+      completeActivity(toastId, 'Board deleted', { subject: groupName })
     } catch (err) {
       if (mutationFailedQueued(err)) {
         dismissToast(toastId)
         return
       }
-      setError(err instanceof Error ? err.message : 'Failed to delete project')
-      failActivity(toastId, 'Failed to delete project')
+      setError(err instanceof Error ? err.message : 'Failed to delete board')
+      failActivity(toastId, 'Failed to delete board')
       await loadBoard()
     }
   }, [beginActivity, board.groups, completeActivity, failActivity, loadBoard])
 
   const handleCreateTask = useCallback(async (groupId: number, insertAtIndex?: number): Promise<Task | null> => {
-    const projectName = groupNameFor(board, groupId)
+    const boardName = groupNameFor(board, groupId)
     const toastId = beginActivity()
     try {
       const created = await createTask(DEFAULT_TASK_TITLE, groupId)
@@ -443,7 +444,7 @@ export default function App() {
       window.setTimeout(() => {
         completeActivity(toastId, 'Task created', {
           subject: DEFAULT_TASK_TITLE,
-          detail: projectName ? `Project · ${projectName}` : undefined,
+          detail: boardName ? `Board · ${boardName}` : undefined,
         })
       }, TASK_CREATE_TOAST_DELAY_MS)
       return task
@@ -465,7 +466,7 @@ export default function App() {
     }
 
     const previousTitle = task.title
-    const projectName = groupNameFor(board, task.groupId)
+    const boardName = groupNameFor(board, task.groupId)
     const toastId = beginActivity()
     setBoard((current) => ({
       ...current,
@@ -483,7 +484,7 @@ export default function App() {
       completeActivity(toastId, 'Task renamed', {
         from: previousTitle,
         to: title,
-        detail: projectName ? `Project · ${projectName}` : undefined,
+        detail: boardName ? `Board · ${boardName}` : undefined,
       })
     } catch (err) {
       if (mutationFailedQueued(err)) {
@@ -586,7 +587,7 @@ export default function App() {
 
   const handleDeleteTask = useCallback(async (task: Task) => {
     const toastId = beginActivity()
-    const projectName = groupNameFor(board, task.groupId)
+    const boardName = groupNameFor(board, task.groupId)
     setBoard((current) => ({
       ...current,
       tasks: current.tasks.filter((item) => item.id !== task.id),
@@ -601,7 +602,7 @@ export default function App() {
       setDeletedTasks(recycleData.tasks)
       completeActivity(toastId, 'Task moved to Recycle Bin', {
         subject: task.title,
-        detail: projectName ? `Project · ${projectName}` : undefined,
+        detail: boardName ? `Board · ${boardName}` : undefined,
       })
     } catch (err) {
       if (mutationFailedQueued(err)) {
@@ -614,9 +615,79 @@ export default function App() {
     }
   }, [beginActivity, board, completeActivity, failActivity, loadBoard])
 
+  const handleBulkDeleteTasks = useCallback(async (tasksToDelete: Task[]) => {
+    if (tasksToDelete.length === 0) {
+      return
+    }
+    const ids = new Set(tasksToDelete.map((task) => task.id))
+    const toastId = beginActivity()
+    setBoard((current) => {
+      const removedByGroup = new Map<number, number>()
+      tasksToDelete.forEach((task) => {
+        if (task.groupId != null) {
+          removedByGroup.set(task.groupId, (removedByGroup.get(task.groupId) ?? 0) + 1)
+        }
+      })
+      return {
+        ...current,
+        tasks: current.tasks.filter((task) => !ids.has(task.id)),
+        groups: current.groups.map((group) => {
+          const removed = removedByGroup.get(group.id) ?? 0
+          return removed > 0
+            ? { ...group, taskCount: Math.max(0, group.taskCount - removed) }
+            : group
+        }),
+      }
+    })
+
+    try {
+      for (const task of tasksToDelete) {
+        await deleteTask(task.id)
+      }
+      const recycleData = await getRecycleBin()
+      setDeletedTasks(recycleData.tasks)
+      const count = tasksToDelete.length
+      completeActivity(toastId, `${count} task${count === 1 ? '' : 's'} moved to Recycle Bin`)
+    } catch (err) {
+      if (mutationFailedQueued(err)) {
+        dismissToast(toastId)
+        return
+      }
+      setError(err instanceof Error ? err.message : 'Failed to delete tasks')
+      failActivity(toastId, 'Failed to delete tasks')
+      await loadBoard()
+    }
+  }, [beginActivity, completeActivity, failActivity, loadBoard])
+
+  const handleClearRecycleBin = useCallback(async () => {
+    const count = deletedTasks.length
+    const toastId = beginActivity()
+    setDeletedTasks([])
+    try {
+      await clearRecycleBin()
+      completeActivity(toastId, 'Recycle bin cleared', {
+        detail: count > 0 ? `${count} task${count === 1 ? '' : 's'} permanently removed` : undefined,
+      })
+    } catch (err) {
+      if (mutationFailedQueued(err)) {
+        dismissToast(toastId)
+        return
+      }
+      setError(err instanceof Error ? err.message : 'Failed to clear recycle bin')
+      failActivity(toastId, 'Failed to clear recycle bin')
+      const recycleData = await getRecycleBin()
+      setDeletedTasks(recycleData.tasks)
+    }
+  }, [beginActivity, completeActivity, deletedTasks.length, failActivity])
+
+  const handleClearPendingSync = useCallback(() => {
+    clearAllPendingSync()
+    refreshPending()
+  }, [refreshPending])
+
   const handleRestoreTask = useCallback(async (task: Task) => {
     const toastId = beginActivity()
-    const projectName = groupNameFor(board, task.groupId)
+    const boardName = groupNameFor(board, task.groupId)
     setDeletedTasks((current) => current.filter((item) => item.id !== task.id))
 
     try {
@@ -630,7 +701,7 @@ export default function App() {
       }))
       completeActivity(toastId, 'Task restored', {
         subject: task.title,
-        detail: projectName ? `Project · ${projectName}` : undefined,
+        detail: boardName ? `Board · ${boardName}` : undefined,
       })
     } catch (err) {
       if (mutationFailedQueued(err)) {
@@ -808,9 +879,15 @@ export default function App() {
                 removePendingSyncItem(id)
                 refreshPending()
               }}
+              onClearAll={handleClearPendingSync}
             />
           ) : activeView === 'recycle' ? (
-            <RecycleBin tasks={deletedTasks} groups={board.groups} onRestore={handleRestoreTask} />
+            <RecycleBin
+              tasks={deletedTasks}
+              groups={board.groups}
+              onRestore={handleRestoreTask}
+              onClearAll={handleClearRecycleBin}
+            />
           ) : (
             <div className="flex min-h-0 flex-1 flex-col">
             <TaskBoard
@@ -831,6 +908,8 @@ export default function App() {
               onUpdateComment={handleUpdateComment}
               onDeleteComment={handleDeleteComment}
               onDeleteTask={handleDeleteTask}
+              onDeleteTasks={handleBulkDeleteTasks}
+              onDeleteGroup={handleDeleteGroup}
               onSelectGroup={setActiveView}
               searchQuery={searchQuery}
               priorityFilter={priorityFilter}

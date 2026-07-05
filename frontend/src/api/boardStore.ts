@@ -37,5 +37,6 @@ export const updateComment = pick(apiBoard.updateComment, guestBoard.updateComme
 export const deleteComment = pick(apiBoard.deleteComment, guestBoard.deleteComment)
 export const deleteTask = pick(apiBoard.deleteTask, guestBoard.deleteTask)
 export const restoreTask = pick(apiBoard.restoreTask, guestBoard.restoreTask)
+export const clearRecycleBin = pick(apiBoard.clearRecycleBin, guestBoard.clearRecycleBin)
 export { mergeTaskUpdate } from './board'
 export { initializeGuestData } from './guestBoard'

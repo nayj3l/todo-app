@@ -26,7 +26,7 @@ export default function LoginPage({
         <div className="mb-8 text-center">
           <h1 className="text-2xl font-semibold text-[#1A1A2E]">{APP_NAME}</h1>
           <p className="mt-2 text-sm text-surface-muted">
-            Sign in to save your projects, or try guest mode on this device.
+            Sign in to save your boards, or try guest mode on this device.
           </p>
         </div>
 

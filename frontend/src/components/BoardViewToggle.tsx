@@ -47,7 +47,7 @@ export default function BoardViewToggle({
         onClick={() => columnsAvailable && onBoardViewChange('columns')}
         disabled={!columnsAvailable}
         className={`flex h-9 w-9 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40 ${toggleClass(boardView === 'columns')}`}
-        title={columnsAvailable ? 'Column view' : 'Column view (All Projects only)'}
+        title={columnsAvailable ? 'Column view' : 'Column view (All Boards only)'}
         aria-label="Column view"
         aria-pressed={boardView === 'columns'}
       >

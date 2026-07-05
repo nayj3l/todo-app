@@ -1,7 +1,7 @@
 export type ActivityLogStatus = 'success' | 'error'
 
 export interface ActivityLogMeta {
-  /** Primary entity, e.g. task or project name */
+  /** Primary entity, e.g. task or board name */
   subject?: string
   /** Previous value for change actions */
   from?: string

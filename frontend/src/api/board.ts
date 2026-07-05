@@ -52,6 +52,18 @@ export async function getRecycleBin(): Promise<RecycleBin> {
   }
 }
 
+async function clearRecycleBinDirect(): Promise<void> {
+  await handleResponse<void>(
+    await apiFetch('/api/recycle-bin', {
+      method: 'DELETE',
+    }),
+  )
+}
+
+export async function clearRecycleBin(): Promise<void> {
+  return withResilientSync('Clear recycle bin', { kind: 'clearRecycleBin' }, () => clearRecycleBinDirect())
+}
+
 async function reorderTasksDirect(items: TaskReorderItem[]): Promise<Board> {
   const response = await apiFetch('/api/board/reorder', {
     method: 'POST',
@@ -85,7 +97,7 @@ async function reorderGroupsDirect(groupIds: number[]): Promise<Board> {
 }
 
 export async function reorderGroups(groupIds: number[]): Promise<Board> {
-  return withResilientSync('Reorder projects', { kind: 'reorderGroups', groupIds }, () =>
+  return withResilientSync('Reorder boards', { kind: 'reorderGroups', groupIds }, () =>
     reorderGroupsDirect(groupIds),
   )
 }
@@ -166,7 +178,7 @@ async function createGroupDirect(name: string, color?: string): Promise<TaskGrou
 }
 
 export async function createGroup(name: string, color?: string): Promise<TaskGroup> {
-  return withResilientSync('Create project', { kind: 'createGroup', name, color }, () =>
+  return withResilientSync('Create board', { kind: 'createGroup', name, color }, () =>
     createGroupDirect(name, color),
   )
 }
@@ -187,7 +199,7 @@ export async function updateGroup(
   id: number,
   updates: { name?: string; color?: string },
 ): Promise<TaskGroup> {
-  const label = updates.name ? 'Rename project' : 'Update project'
+  const label = updates.name ? 'Rename board' : 'Update board'
   return withResilientSync(label, { kind: 'updateGroup', groupId: id, ...updates }, () =>
     updateGroupDirect(id, updates),
   )
@@ -202,7 +214,7 @@ async function deleteGroupDirect(id: number): Promise<void> {
 }
 
 export async function deleteGroup(id: number): Promise<void> {
-  return withResilientSync('Delete project', { kind: 'deleteGroup', groupId: id }, () =>
+  return withResilientSync('Delete board', { kind: 'deleteGroup', groupId: id }, () =>
     deleteGroupDirect(id),
   )
 }
@@ -335,6 +347,9 @@ export async function runPendingOperation(operation: PendingSyncOperation): Prom
       return
     case 'restoreTask':
       await restoreTaskDirect(operation.taskId)
+      return
+    case 'clearRecycleBin':
+      await clearRecycleBinDirect()
       return
     default:
       throw new Error('Unknown pending operation')
